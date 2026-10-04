@@ -285,6 +285,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   <div id="ptoSubApert" style="display:none">
     <div class="controls">
       <div class="ctl"><label for="paCuenta">Cuenta contable</label><select id="paCuenta"></select></div>
+      <div class="ctl"><label for="paMoneda">Moneda</label><select id="paMoneda"><option value="0" selected>Pesos ($)</option><option value="1">USD Oficial</option><option value="2">USD Billete</option><option value="3">Ajustado x inflación (AXI)</option></select></div>
       <div class="ctl"><label for="paGrupo">Grupo</label><select id="paGrupo"><option value="">Todos</option></select></div>
       <div class="ctl"><label for="paDesde">Desde</label><select id="paDesde"></select></div>
       <div class="ctl"><label for="paHasta">Hasta</label><select id="paHasta"></select></div>
@@ -938,8 +939,47 @@ function initPtoApertura(){
   document.getElementById("paGrupo").addEventListener("change",()=>{poblarMesesApertura();renderPtoApertura();});
   document.getElementById("paDesde").addEventListener("change",renderPtoApertura);
   document.getElementById("paHasta").addEventListener("change",renderPtoApertura);
+  document.getElementById("paMoneda").addEventListener("change",renderPtoApertura);
   poblarGrupoApertura();
   poblarMesesApertura();
+}
+/* 2026-10-04 -- Moneda en Apertura de Estructura (a pedido de Micaela: Pesos / USD Oficial / USD Billete /
+   AXI, para todas las cuentas del desplegable). Criterio, igual que el resto de la app:
+     - Real: cada transaccion se convierte con SU tipo de cambio, el mismo que usa la serie de
+       Presupuesto·Estructura y el EERR (tcOficFor / tcBillFor: TC del dia; en Billete, la cotizacion
+       propia del asiento para ContaParam/ContaOC y las correcciones por comprobante) y el factor AXI
+       del mes. Se guarda al cargar el crudo (usdOf/usdBi/axi en cada transaccion de APERTURA_DETALLE
+       y APERTURA_ESTRUCTURA_TOTAL). Las transacciones cargadas ANTES de este cambio no lo tienen: se
+       calcula en el momento con la fecha (Oficial y AXI dan igual; Billete puede diferir en asientos
+       ContaParam/ContaOC sin correccion cargada) hasta que se vuelva a cargar el crudo de esos meses.
+     - Pto: mismo factor que Presupuesto·Estructura (TC fijo de "Config Pto" para USD; AXI sin factor
+       extra, el Pto ya esta en pesos ajustados por su propia vigencia) -- ver factorPtoMoneda.
+   La conversion se hace sobre una COPIA de cada transaccion (ars = importe en la moneda elegida,
+   ars0 = pesos originales, fx = ars/ars0), asi todas las variantes de tabla de abajo siguen sumando
+   "ars" sin cambios; aux2ItemsParaTx parte por importe usando ars0 (pesos) para no romper el match. */
+function monedaTxApertura(t,cur){
+  if(!cur) return t.ars;
+  const fechaRef=t.fecha||(t.mes+"-28");
+  if(cur===1){
+    if(t.usdOf!=null) return t.usdOf;
+    const tc=tcOficFor(fechaRef,t.origen,t.ars,0); return tc?t.ars/tc:0;
+  }
+  if(cur===2){
+    if(t.usdBi!=null) return t.usdBi;
+    const tc=tcBillFor(fechaRef,t.origen,0,t.comprobante||null); return tc?t.ars/tc:0;
+  }
+  if(t.axi!=null) return t.axi;
+  const f=axiFactorFor(t.mes); return f!=null?t.ars*f:0;
+}
+function convertirTxApertura(t,cur){
+  if(!cur) return t;
+  const v=monedaTxApertura(t,cur);
+  return {...t,ars:v,ars0:t.ars,fx:t.ars?v/t.ars:0};
+}
+function factorPtoMoneda(cur){
+  const CFG=OVERRIDES.__cfg__||{tcOf:1455,tcBill:1435};
+  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;
+  return [1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1][cur]||1;
 }
 function renderPtoApertura(){
   const sel=document.getElementById("paCuenta"); if(!sel) return;
@@ -956,7 +996,12 @@ function renderPtoApertura(){
   const a=Math.min(i0,i1),b=Math.max(i0,i1);
   const mesesSel=meses.slice(a,b+1);
   const mesesSelSet=new Set(mesesSel);
-  const txs=todasT.filter(t=>mesesSelSet.has(t.mes));
+  const cur=+((document.getElementById("paMoneda")||{}).value||0);
+  const txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
+  const fPto=factorPtoMoneda(cur), curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
+  // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
+  // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
+  const nBillAprox=cur===2?todasT.filter(t=>mesesSelSet.has(t.mes)&&t.usdBi==null).length:0;
   const clasFn=CLASIF_APERTURA_FN[cuenta];
   if(!clasFn){
     document.getElementById("paKpis").innerHTML="";
@@ -1020,8 +1065,8 @@ function renderPtoApertura(){
   const ovCuenta=OVERRIDES[cuenta];
   const baseCuenta=ovCuenta?ovCuenta.base:"mensual";
   const ptoMesFn=m=>{
-    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0);
-    const v=ptoEnMes(cuenta,m,1); return baseCuenta==="anual"?v/12:v;
+    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0)*fPto;
+    const v=ptoEnMes(cuenta,m,fPto); return baseCuenta==="anual"?v/12:v;
   };
   const ptoPorMes=mesesSel.map(ptoMesFn);
   const totCells=colTot.map((v,i)=>{
@@ -1054,10 +1099,10 @@ function renderPtoApertura(){
   const desvioRow=`<tr><td class="fz fz1 info">Desvío</td>${desvioCells}<td class="fzr info${totalArsCls}" style="text-align:right"><b>${fmt(desvioTotalSum)}</b></td><td class="fzr info"></td></tr>`;
   const monthHdr=mesesSel.map(m=>`<th class="mescol">${mesLabel(m)}</th>`).join("");
   document.getElementById("paTabla").className="grid";
-  document.getElementById("paTabla").innerHTML=`<thead><tr><th class="fz fz1">Concepto</th>${monthHdr}<th class="fzr">Total ARS</th><th class="fzr" style="max-width:64px">Asientos</th></tr></thead><tbody>${rowsHtml}${totalRow}${ptoRow}${desvioRow}</tbody>`;
+  document.getElementById("paTabla").innerHTML=`<thead><tr><th class="fz fz1">Concepto</th>${monthHdr}<th class="fzr">Total ${curTag}</th><th class="fzr" style="max-width:64px">Asientos</th></tr></thead><tbody>${rowsHtml}${totalRow}${ptoRow}${desvioRow}</tbody>`;
   colResizeInit(document.getElementById("paTabla"));
   requestAnimationFrame(()=>{ actualizarStickyPto("paTabla"); actualizarStickyPtoDerecha("paTabla"); });
-  document.getElementById("paKpis").innerHTML=`<div class="kpi"><div class="k-lbl">Total del período</div><div class="k-val">$ ${fmtM(total)}</div></div><div class="kpi"><div class="k-lbl">Asientos</div><div class="k-val">${txs.length}</div></div><div class="kpi"><div class="k-lbl">Conceptos distintos</div><div class="k-val">${conceptos.length}</div></div>`;
+  document.getElementById("paKpis").innerHTML=(nBillAprox?`<div class="cc-note cc-warnt" style="grid-column:1/-1;margin:0">⚠ ${nBillAprox} transacciones de este período se cargaron antes de que la app guardara el tipo de cambio de cada asiento: en USD Billete se muestran con el TC del día, que puede no coincidir con la cotización propia del asiento. Volvé a cargar el crudo de esos meses para que quede exacto.</div>`:"")+`<div class="kpi"><div class="k-lbl">Total del período${cur?" · "+curTag:""}</div><div class="k-val">${curLbl} ${fmtM(total)}</div></div><div class="kpi"><div class="k-lbl">Asientos</div><div class="k-val">${txs.length}</div></div><div class="kpi"><div class="k-lbl">Conceptos distintos</div><div class="k-val">${conceptos.length}</div></div>`;
   const debugGrupos=debugGruposPorConcepto(cuenta);
   const debugTxt=Object.keys(debugGrupos).sort().map(c=>esc(c)+": "+[...debugGrupos[c]].map(esc).join(", ")).join(" · ");
   // Diagnostico del propio filtro (no solo de los datos): que valor exacto quedo elegido en el
@@ -1076,7 +1121,7 @@ function renderPtoApertura(){
     ?`Cuentas reales con Grupo "K) ESTRUCTURA"/"K) ESTRUCTURA NQN" en el crudo que TODAVÍA no están mapeadas en ninguna Apertura de Estructura (ver APERTURA_CUENTAS_MAP) -- si una cuenta que ves acá ya tiene su propia Apertura, revisá que su nombre real esté bien escrito en el mapeo. El desglose es agregado por mes (no transacción por transacción como el resto de esta pantalla) y "Asientos" cuenta combinaciones cuenta+mes con movimiento, no comprobantes.`
     :`Desglose transacción por transacción del "02-EERR" para "${esc(cuenta)}"${grupoSel?" ("+esc(grupoSel)+")":""}, agrupado por concepto y mes según la regla que definimos para esta cuenta.`;
   document.getElementById("paFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">${encabezadoNota}${notaResumen} La fila "Pto" muestra el presupuesto mensual (suma de los Pto por concepto de más abajo, si ya están cargados; vacío en los meses sin ninguna vigencia todavía) y la fila "Desvío" la diferencia Pto − real de cada mes — en <span class="under">verde</span> cuando el real vino por debajo del Pto, en <span class="over">rojo</span> cuando lo superó; la columna Total de ambas es la suma de los meses que se ven arriba (Desde/Hasta).<br><span class="mut" style="font-size:11px">${esc(etiquetaFiltroApertura(cuenta))} real por concepto (diagnóstico, todos los meses cargados, no solo los de arriba): ${debugTxt||"–"}</span><br><span class="mut" style="font-size:11px">${esc(debugFiltro)}</span></div></details>`;
-  renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel);
+  renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto);
   sincronizarAnchoPtoConcepto();
 }
 // Segunda tabla: Pto de CADA concepto mes a mes (no el real) -- muestra como se compone el Pto
@@ -1084,7 +1129,8 @@ function renderPtoApertura(){
 // Usa los conceptos que tienen Pto cargado (APERTURA_PTO), no los de la tabla de arriba -- para que
 // un concepto dado de baja (sin transacciones en el rango visible) siga mostrando su fila. Si hay un
 // Grupo elegido arriba, se acota a los conceptos de ese Grupo (ver aperturaPtoGrupoDe).
-function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel){
+function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
+  if(fPto==null) fPto=1;
   const wrap=document.getElementById("paPtoWrap"), tabla=document.getElementById("paPtoTabla"), foot=document.getElementById("paPtoFoot");
   let ptoKeys=Object.keys(APERTURA_PTO[cuenta]||{});
   if(grupoSel) ptoKeys=ptoKeys.filter(k=>normApertura(aperturaPtoFiltroDe(cuenta,k))===normApertura(grupoSel));
@@ -1097,8 +1143,8 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel){
   wrap.style.display="";
   const colTot=mesesSel.map(()=>0);
   const rowsHtml=conConceptoPto.map(k=>{
-    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m); colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m),0);
+    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m)*fPto; colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
+    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m)*fPto,0);
     return `<tr><td class="fz fz1 ell" style="max-width:none" title="${esc(k)}">${esc(k)}</td>${cells}<td class="fzr${signoCls(totalK)}" style="text-align:right"><b>${fmt(totalK)}</b></td><td class="fzr"></td></tr>`;
   }).join("");
   const totCells=colTot.map(v=>`<td class="mescol${signoCls(v)}" style="text-align:right"><b>${v?fmt(v):"–"}</b></td>`).join("");
@@ -2271,7 +2317,8 @@ function parseRawLedgerCuentas(rows){
     const cuentaApertura=APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cuenta)];
     if(cuentaApertura && !(APERTURA_GRUPOS_EXCLUIR[cuentaApertura]||[]).some(g=>normApertura(g)===normApertura(grupo))){
       if(!detalle[cuentaApertura]) detalle[cuentaApertura]=[];
-      detalle[cuentaApertura].push({mes:y,fecha:dstr,origen,grupo,tipoComp:S(r[6]),razonSocial:S(r[4]),comprobante,cuenta,ars:Math.round(ars*100)/100});
+      detalle[cuentaApertura].push({mes:y,fecha:dstr,origen,grupo,tipoComp:S(r[6]),razonSocial:S(r[4]),comprobante,cuenta,ars:Math.round(ars*100)/100,
+        usdOf:Math.round(usdOfic*1e4)/1e4,usdBi:Math.round(usdBill*1e4)/1e4,axi:Math.round(axi*100)/100}); // moneda: mismo calculo que la serie de Presupuesto (ver monedaTxApertura)
       const kg=claveAux2(cuenta,comprobante,dstr);
       if(!gruposMontosPorClave[kg]) gruposMontosPorClave[kg]={};
       gruposMontosPorClave[kg][grupo]=(gruposMontosPorClave[kg][grupo]||0)+ars;
@@ -2335,7 +2382,8 @@ function mergeAperturaEstructuraTotal(resCuentas){
     const serie=resCuentas.cuentas[k];
     Object.keys(serie).forEach(m=>{
       const ars=serie[m][0]; if(!ars) return;
-      (nuevoPorCuenta[cta]||(nuevoPorCuenta[cta]=[])).push({mes:m,grupo:grp,cuenta:cta,ars:Math.round(ars*100)/100,origen:"",tipoComp:"",comprobante:"",razonSocial:""});
+      (nuevoPorCuenta[cta]||(nuevoPorCuenta[cta]=[])).push({mes:m,grupo:grp,cuenta:cta,ars:Math.round(ars*100)/100,origen:"",tipoComp:"",comprobante:"",razonSocial:"",
+        usdOf:serie[m][1],usdBi:serie[m][2],axi:serie[m][3]});
     });
   });
   const mesesArchivo=new Set(resCuentas.meses);
@@ -2389,7 +2437,7 @@ function aux2ItemsParaTx(cuentaVirtual,t){
   if(!reg) return null;
   const grupos=Object.keys(reg.gruposMontos||{});
   if(grupos.length<=1) return reg.items;
-  return subconjuntoUnicoQueSuma(reg.items,t.ars);
+  return subconjuntoUnicoQueSuma(reg.items,t.ars0!=null?t.ars0:t.ars); // ars0 = pesos originales cuando la vista esta en otra moneda
 }
 // Orden manual de los "Concepto" de Apertura de Estructura, elegido a mano (flechas subir/bajar) --
 // cuenta -> [concepto, concepto, ...]. Los conceptos que todavia no se ordenaron a mano se agregan
@@ -2854,7 +2902,7 @@ function filasAperturaPorGrupoYCuentaReal(cuenta,cfgGrupo,txs,clasFn,mesesSel){
       if(items&&items.length){
         items.forEach(it=>{
           const k=it.desc||sinAux0N;
-          (porAux06[k]||(porAux06[k]=[])).push({...t,ars:it.ars});
+          (porAux06[k]||(porAux06[k]=[])).push({...t,ars:it.ars*(t.fx!=null?t.fx:1),ars0:it.ars}); // fx: misma conversion de moneda que la transaccion
         });
       }else{
         (porAux06[sinAux0N]||(porAux06[sinAux0N]=[])).push(t);
