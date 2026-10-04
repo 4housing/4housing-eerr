@@ -952,8 +952,8 @@ function initPtoApertura(){
        y APERTURA_ESTRUCTURA_TOTAL). Las transacciones cargadas ANTES de este cambio no lo tienen: se
        calcula en el momento con la fecha (Oficial y AXI dan igual; Billete puede diferir en asientos
        ContaParam/ContaOC sin correccion cargada) hasta que se vuelva a cargar el crudo de esos meses.
-     - Pto: mismo factor que Presupuesto·Estructura (TC fijo de "Config Pto" para USD; AXI sin factor
-       extra, el Pto ya esta en pesos ajustados por su propia vigencia) -- ver factorPtoMoneda.
+     - Pto: en USD, mismo TC fijo de "Config Pto" que Presupuesto·Estructura; en AXI, el factor AXI de
+       cada mes (igual que el real) -- ver factorPtoMoneda.
    La conversion se hace sobre una COPIA de cada transaccion (ars = importe en la moneda elegida,
    ars0 = pesos originales, fx = ars/ars0), asi todas las variantes de tabla de abajo siguen sumando
    "ars" sin cambios; aux2ItemsParaTx parte por importe usando ars0 (pesos) para no romper el match. */
@@ -976,7 +976,12 @@ function convertirTxApertura(t,cur){
   const v=monedaTxApertura(t,cur);
   return {...t,ars:v,ars0:t.ars,fx:t.ars?v/t.ars:0};
 }
-function factorPtoMoneda(cur){
+// AXI (2026-10-04, observacion de Micaela): el Pto de cada mes esta en pesos NOMINALES de ese mes
+// (pesosEnMes lo escala por FACPCE desde su vigencia), asi que para compararlo contra el real en AXI
+// hay que llevarlo a pesos del mes ancla con el mismo factor del mes que el real (axiFactorFor). Antes
+// se dejaba con factor 1 y el Pto AXI quedaba igual al nominal mientras el real si se ajustaba.
+function factorPtoMoneda(cur,ym){
+  if(cur===3){ const f=ym?axiFactorFor(ym):null; return f!=null?f:1; }
   const CFG=OVERRIDES.__cfg__||{tcOf:1455,tcBill:1435};
   const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;
   return [1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1][cur]||1;
@@ -998,7 +1003,7 @@ function renderPtoApertura(){
   const mesesSelSet=new Set(mesesSel);
   const cur=+((document.getElementById("paMoneda")||{}).value||0);
   const txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
-  const fPto=factorPtoMoneda(cur), curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
+  const fPto=m=>factorPtoMoneda(cur,m), curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
   // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
   // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
   const nBillAprox=cur===2?todasT.filter(t=>mesesSelSet.has(t.mes)&&t.usdBi==null).length:0;
@@ -1065,8 +1070,8 @@ function renderPtoApertura(){
   const ovCuenta=OVERRIDES[cuenta];
   const baseCuenta=ovCuenta?ovCuenta.base:"mensual";
   const ptoMesFn=m=>{
-    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0)*fPto;
-    const v=ptoEnMes(cuenta,m,fPto); return baseCuenta==="anual"?v/12:v;
+    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0)*fPto(m);
+    const v=ptoEnMes(cuenta,m,fPto(m)); return baseCuenta==="anual"?v/12:v;
   };
   const ptoPorMes=mesesSel.map(ptoMesFn);
   const totCells=colTot.map((v,i)=>{
@@ -1130,7 +1135,7 @@ function renderPtoApertura(){
 // un concepto dado de baja (sin transacciones en el rango visible) siga mostrando su fila. Si hay un
 // Grupo elegido arriba, se acota a los conceptos de ese Grupo (ver aperturaPtoGrupoDe).
 function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
-  if(fPto==null) fPto=1;
+  if(typeof fPto!=="function") fPto=()=>1;
   const wrap=document.getElementById("paPtoWrap"), tabla=document.getElementById("paPtoTabla"), foot=document.getElementById("paPtoFoot");
   let ptoKeys=Object.keys(APERTURA_PTO[cuenta]||{});
   if(grupoSel) ptoKeys=ptoKeys.filter(k=>normApertura(aperturaPtoFiltroDe(cuenta,k))===normApertura(grupoSel));
@@ -1143,8 +1148,8 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
   wrap.style.display="";
   const colTot=mesesSel.map(()=>0);
   const rowsHtml=conConceptoPto.map(k=>{
-    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m)*fPto; colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m)*fPto,0);
+    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m)*fPto(m); colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
+    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m)*fPto(m),0);
     return `<tr><td class="fz fz1 ell" style="max-width:none" title="${esc(k)}">${esc(k)}</td>${cells}<td class="fzr${signoCls(totalK)}" style="text-align:right"><b>${fmt(totalK)}</b></td><td class="fzr"></td></tr>`;
   }).join("");
   const totCells=colTot.map(v=>`<td class="mescol${signoCls(v)}" style="text-align:right"><b>${v?fmt(v):"–"}</b></td>`).join("");
