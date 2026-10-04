@@ -952,8 +952,8 @@ function initPtoApertura(){
        y APERTURA_ESTRUCTURA_TOTAL). Las transacciones cargadas ANTES de este cambio no lo tienen: se
        calcula en el momento con la fecha (Oficial y AXI dan igual; Billete puede diferir en asientos
        ContaParam/ContaOC sin correccion cargada) hasta que se vuelva a cargar el crudo de esos meses.
-     - Pto: mismo factor que Presupuesto·Estructura (TC fijo de "Config Pto" para USD; AXI sin factor
-       extra, el Pto ya esta en pesos ajustados por su propia vigencia) -- ver factorPtoMoneda.
+     - Pto: en USD, mismo TC fijo de "Config Pto" que Presupuesto·Estructura; en AXI, el factor AXI de
+       cada mes (igual que el real) -- ver factorPtoMoneda.
    La conversion se hace sobre una COPIA de cada transaccion (ars = importe en la moneda elegida,
    ars0 = pesos originales, fx = ars/ars0), asi todas las variantes de tabla de abajo siguen sumando
    "ars" sin cambios; aux2ItemsParaTx parte por importe usando ars0 (pesos) para no romper el match. */
@@ -976,7 +976,12 @@ function convertirTxApertura(t,cur){
   const v=monedaTxApertura(t,cur);
   return {...t,ars:v,ars0:t.ars,fx:t.ars?v/t.ars:0};
 }
-function factorPtoMoneda(cur){
+// AXI (2026-10-04, observacion de Micaela): el Pto de cada mes esta en pesos NOMINALES de ese mes
+// (pesosEnMes lo escala por FACPCE desde su vigencia), asi que para compararlo contra el real en AXI
+// hay que llevarlo a pesos del mes ancla con el mismo factor del mes que el real (axiFactorFor). Antes
+// se dejaba con factor 1 y el Pto AXI quedaba igual al nominal mientras el real si se ajustaba.
+function factorPtoMoneda(cur,ym){
+  if(cur===3){ const f=ym?axiFactorFor(ym):null; return f!=null?f:1; }
   const CFG=OVERRIDES.__cfg__||{tcOf:1455,tcBill:1435};
   const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;
   return [1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1][cur]||1;
@@ -998,7 +1003,7 @@ function renderPtoApertura(){
   const mesesSelSet=new Set(mesesSel);
   const cur=+((document.getElementById("paMoneda")||{}).value||0);
   const txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
-  const fPto=factorPtoMoneda(cur), curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
+  const fPto=m=>factorPtoMoneda(cur,m), curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
   // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
   // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
   const nBillAprox=cur===2?todasT.filter(t=>mesesSelSet.has(t.mes)&&t.usdBi==null).length:0;
@@ -1065,8 +1070,8 @@ function renderPtoApertura(){
   const ovCuenta=OVERRIDES[cuenta];
   const baseCuenta=ovCuenta?ovCuenta.base:"mensual";
   const ptoMesFn=m=>{
-    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0)*fPto;
-    const v=ptoEnMes(cuenta,m,fPto); return baseCuenta==="anual"?v/12:v;
+    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0)*fPto(m);
+    const v=ptoEnMes(cuenta,m,fPto(m)); return baseCuenta==="anual"?v/12:v;
   };
   const ptoPorMes=mesesSel.map(ptoMesFn);
   const totCells=colTot.map((v,i)=>{
@@ -1130,7 +1135,7 @@ function renderPtoApertura(){
 // un concepto dado de baja (sin transacciones en el rango visible) siga mostrando su fila. Si hay un
 // Grupo elegido arriba, se acota a los conceptos de ese Grupo (ver aperturaPtoGrupoDe).
 function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
-  if(fPto==null) fPto=1;
+  if(typeof fPto!=="function") fPto=()=>1;
   const wrap=document.getElementById("paPtoWrap"), tabla=document.getElementById("paPtoTabla"), foot=document.getElementById("paPtoFoot");
   let ptoKeys=Object.keys(APERTURA_PTO[cuenta]||{});
   if(grupoSel) ptoKeys=ptoKeys.filter(k=>normApertura(aperturaPtoFiltroDe(cuenta,k))===normApertura(grupoSel));
@@ -1143,8 +1148,8 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
   wrap.style.display="";
   const colTot=mesesSel.map(()=>0);
   const rowsHtml=conConceptoPto.map(k=>{
-    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m)*fPto; colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m)*fPto,0);
+    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m)*fPto(m); colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
+    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m)*fPto(m),0);
     return `<tr><td class="fz fz1 ell" style="max-width:none" title="${esc(k)}">${esc(k)}</td>${cells}<td class="fzr${signoCls(totalK)}" style="text-align:right"><b>${fmt(totalK)}</b></td><td class="fzr"></td></tr>`;
   }).join("");
   const totCells=colTot.map(v=>`<td class="mescol${signoCls(v)}" style="text-align:right"><b>${v?fmt(v):"–"}</b></td>`).join("");
@@ -1286,7 +1291,14 @@ window.togglePtoDetalle=togglePtoDetalle;
   const bloque=document.getElementById("pBloque").value;
   const cur=+document.getElementById("pMoneda").value;const curLbl=["$","US$","US$","$"][cur],curTag=["pesos","USD of.","USD bill.","AXI"][cur];
   const CFGd={fechaBase:FECHA_BASE_DEFAULT_YM,tcOf:1455,tcBill:1435};if(!OVERRIDES.__cfg__)OVERRIDES.__cfg__=Object.assign({},CFGd);const CFG=OVERRIDES.__cfg__;
-  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;const repFac=[1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1],fCur=repFac[cur];window.curPtoFac=fCur;
+  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;const repFac=[1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1],fCur=repFac[cur];
+  // AXI (2026-10-04, a pedido de Micaela): el Pto de cada mes esta en pesos nominales de ese mes, asi que
+  // en AXI se lleva a pesos del mes ancla con el factor AXI de ESE mes (igual que el real, ver
+  // factorPtoMoneda). Antes quedaba con factor 1. El input "Pto" (en pesos de la fecha base) usa el factor
+  // de la fecha base, y window.curPtoFac lo deshace al editar, asi lo guardado sigue en pesos nominales.
+  const fPtoMes=m=>cur===3?factorPtoMoneda(3,m):fCur;
+  const fechaBaseYM0=CFG.fechaBase||FECHA_BASE_DEFAULT_YM;
+  window.curPtoFac=fPtoMes(fechaBaseYM0);
   const fechaBaseYM=CFG.fechaBase||FECHA_BASE_DEFAULT_YM;
   {const ce=document.getElementById("ptoCfg");if(ce){
     const opcionesBase=mesesConFuturo(12).map(m=>`<option value="${m}"${m===fechaBaseYM?" selected":""}>${esc(mesLabel(m))}</option>`).join("");
@@ -1311,8 +1323,8 @@ window.togglePtoDetalle=togglePtoDetalle;
   const body=rows.map(c=>{
     const ov=OVERRIDES[c.key],base=ov.base;
     const vigUlt=ptoVigente(c.key,ultimo);
-    const ptoShow=vigUlt?pesosEnMes(vigUlt.pto,vigUlt.desde,fechaBaseYM)*fCur:0;
-    const ptoMesFn=m=>{const v=ptoEnMes(c.key,m,fCur);return base==="anual"?v/12:v;};
+    const ptoShow=vigUlt?pesosEnMes(vigUlt.pto,vigUlt.desde,fechaBaseYM)*fPtoMes(fechaBaseYM):0;
+    const ptoMesFn=m=>{const v=ptoEnMes(c.key,m,fPtoMes(m));return base==="anual"?v/12:v;};
     const ptoMesUlt=ptoMesFn(ultimo);
     const reals=meses.map(m=>{const s=c.serie[m];return s?s[cur]:0;}); reals.forEach((v,k)=>colTot[k]+=v);
     const realUlt=(c.serie[ultimo]?c.serie[ultimo][cur]:0), desvUlt=realUlt-ptoMesUlt;
@@ -1323,7 +1335,7 @@ window.togglePtoDetalle=togglePtoDetalle;
     let acumCell;
     if(base==="anual"){
       const realAcum=mesesAcum.reduce((s,m)=>s+(c.serie[m]?c.serie[m][cur]:0),0);
-      const ptoAnualCur=vigUlt?vigUlt.pto*fCur:0;
+      const ptoAnualCur=vigUlt?vigUlt.pto*fPtoMes(vigUlt.desde):0;
       const pctA=ptoAnualCur?realAcum/ptoAnualCur:null;
       acumCell=pctA==null?`<td class="info fzr mut">–</td>`:`<td class="info fzr ${realAcum>ptoAnualCur?"over":"under"}">${(pctA*100).toFixed(0)}%</td>`;
     }else{
@@ -3022,6 +3034,19 @@ const APERTURA_PTO_SEED={
   "Food & Bev":{
     "K) ESTRUCTURA":[{desde:"2026-04",pto:7534000}],
     "K) ESTRUCTURA NQN":[{desde:"2026-04",pto:1250000}]
+  },
+  // 2026-10-04, a pedido de Micaela: apertura del Pto de abril/2026 de Movilidad Combustible por
+  // concepto, "como referencia de cómo se compone el total" -- $5.100.000 en total. Las claves son las
+  // mismas etiquetas de los buckets de la tabla (APERTURA_RESUMEN_GRUPO) mas "ContaParam" (modulo).
+  // Ojo: con Pto por concepto, la fila Pto de Apertura suma estos conceptos (no el Pto de la cuenta de
+  // Presupuesto·Estructura, que para abr-26 daba 5.183.754) y queda en blanco antes de abr-26, igual
+  // que Alquileres/Energía (ver aperturaPtoVigente).
+  "Movilidad Combustible":{
+    "Combustible":[{desde:"2026-04",pto:3000000}],
+    "Peajes":[{desde:"2026-04",pto:900000}],
+    "Remises":[{desde:"2026-04",pto:450000}],
+    "Estacionamiento":[{desde:"2026-04",pto:150000}],
+    "ContaParam":[{desde:"2026-04",pto:600000}]
   }
 };
 // A que socio pertenece cada Pto de "Cta Part Socios" -- a diferencia de aperturaPtoGrupoDe (que
