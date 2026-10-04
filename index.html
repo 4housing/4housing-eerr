@@ -1291,7 +1291,14 @@ window.togglePtoDetalle=togglePtoDetalle;
   const bloque=document.getElementById("pBloque").value;
   const cur=+document.getElementById("pMoneda").value;const curLbl=["$","US$","US$","$"][cur],curTag=["pesos","USD of.","USD bill.","AXI"][cur];
   const CFGd={fechaBase:FECHA_BASE_DEFAULT_YM,tcOf:1455,tcBill:1435};if(!OVERRIDES.__cfg__)OVERRIDES.__cfg__=Object.assign({},CFGd);const CFG=OVERRIDES.__cfg__;
-  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;const repFac=[1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1],fCur=repFac[cur];window.curPtoFac=fCur;
+  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;const repFac=[1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1],fCur=repFac[cur];
+  // AXI (2026-10-04, a pedido de Micaela): el Pto de cada mes esta en pesos nominales de ese mes, asi que
+  // en AXI se lleva a pesos del mes ancla con el factor AXI de ESE mes (igual que el real, ver
+  // factorPtoMoneda). Antes quedaba con factor 1. El input "Pto" (en pesos de la fecha base) usa el factor
+  // de la fecha base, y window.curPtoFac lo deshace al editar, asi lo guardado sigue en pesos nominales.
+  const fPtoMes=m=>cur===3?factorPtoMoneda(3,m):fCur;
+  const fechaBaseYM0=CFG.fechaBase||FECHA_BASE_DEFAULT_YM;
+  window.curPtoFac=fPtoMes(fechaBaseYM0);
   const fechaBaseYM=CFG.fechaBase||FECHA_BASE_DEFAULT_YM;
   {const ce=document.getElementById("ptoCfg");if(ce){
     const opcionesBase=mesesConFuturo(12).map(m=>`<option value="${m}"${m===fechaBaseYM?" selected":""}>${esc(mesLabel(m))}</option>`).join("");
@@ -1316,8 +1323,8 @@ window.togglePtoDetalle=togglePtoDetalle;
   const body=rows.map(c=>{
     const ov=OVERRIDES[c.key],base=ov.base;
     const vigUlt=ptoVigente(c.key,ultimo);
-    const ptoShow=vigUlt?pesosEnMes(vigUlt.pto,vigUlt.desde,fechaBaseYM)*fCur:0;
-    const ptoMesFn=m=>{const v=ptoEnMes(c.key,m,fCur);return base==="anual"?v/12:v;};
+    const ptoShow=vigUlt?pesosEnMes(vigUlt.pto,vigUlt.desde,fechaBaseYM)*fPtoMes(fechaBaseYM):0;
+    const ptoMesFn=m=>{const v=ptoEnMes(c.key,m,fPtoMes(m));return base==="anual"?v/12:v;};
     const ptoMesUlt=ptoMesFn(ultimo);
     const reals=meses.map(m=>{const s=c.serie[m];return s?s[cur]:0;}); reals.forEach((v,k)=>colTot[k]+=v);
     const realUlt=(c.serie[ultimo]?c.serie[ultimo][cur]:0), desvUlt=realUlt-ptoMesUlt;
@@ -1328,7 +1335,7 @@ window.togglePtoDetalle=togglePtoDetalle;
     let acumCell;
     if(base==="anual"){
       const realAcum=mesesAcum.reduce((s,m)=>s+(c.serie[m]?c.serie[m][cur]:0),0);
-      const ptoAnualCur=vigUlt?vigUlt.pto*fCur:0;
+      const ptoAnualCur=vigUlt?vigUlt.pto*fPtoMes(vigUlt.desde):0;
       const pctA=ptoAnualCur?realAcum/ptoAnualCur:null;
       acumCell=pctA==null?`<td class="info fzr mut">–</td>`:`<td class="info fzr ${realAcum>ptoAnualCur?"over":"under"}">${(pctA*100).toFixed(0)}%</td>`;
     }else{
@@ -3027,6 +3034,19 @@ const APERTURA_PTO_SEED={
   "Food & Bev":{
     "K) ESTRUCTURA":[{desde:"2026-04",pto:7534000}],
     "K) ESTRUCTURA NQN":[{desde:"2026-04",pto:1250000}]
+  },
+  // 2026-10-04, a pedido de Micaela: apertura del Pto de abril/2026 de Movilidad Combustible por
+  // concepto, "como referencia de cómo se compone el total" -- $5.100.000 en total. Las claves son las
+  // mismas etiquetas de los buckets de la tabla (APERTURA_RESUMEN_GRUPO) mas "ContaParam" (modulo).
+  // Ojo: con Pto por concepto, la fila Pto de Apertura suma estos conceptos (no el Pto de la cuenta de
+  // Presupuesto·Estructura, que para abr-26 daba 5.183.754) y queda en blanco antes de abr-26, igual
+  // que Alquileres/Energía (ver aperturaPtoVigente).
+  "Movilidad Combustible":{
+    "Combustible":[{desde:"2026-04",pto:3000000}],
+    "Peajes":[{desde:"2026-04",pto:900000}],
+    "Remises":[{desde:"2026-04",pto:450000}],
+    "Estacionamiento":[{desde:"2026-04",pto:150000}],
+    "ContaParam":[{desde:"2026-04",pto:600000}]
   }
 };
 // A que socio pertenece cada Pto de "Cta Part Socios" -- a diferencia de aperturaPtoGrupoDe (que
