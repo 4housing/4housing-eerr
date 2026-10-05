@@ -299,8 +299,10 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
     <div class="pto-wrap">
       <div class="table-wrap" style="overflow:visible"><table id="paTabla"></table></div>
       <div class="table-wrap" id="paPtoWrap" style="display:none;overflow:visible;margin-top:16px"><table id="paPtoTabla"></table></div>
+      <div class="table-wrap" id="paInfWrap" style="display:none;overflow:visible;margin-top:16px"><table id="paInfTabla"></table></div>
     </div>
     <div class="foot" id="paPtoFoot"></div>
+    <div class="foot" id="paInfFoot"></div>
     <div class="foot" id="paFoot"></div>
   </div>
   <div id="ptoSubHist" style="display:none">
@@ -1038,6 +1040,8 @@ function renderPtoApertura(){
     document.getElementById("paFoot").innerHTML=`Todavía no definimos cómo clasificar "${esc(cuenta)}". Contame qué información querés ver acá (ej. como con Alquileres) y la agrego.`;
     document.getElementById("paPtoWrap").style.display="none";
     document.getElementById("paPtoFoot").innerHTML="";
+    document.getElementById("paInfWrap").style.display="none";
+    document.getElementById("paInfFoot").innerHTML="";
     return;
   }
   const grupos={};
@@ -1066,17 +1070,7 @@ function renderPtoApertura(){
     ? filasAperturaPorCuentaReal(cuenta,cfgResumen,txs,clasFn,mesesSel)
     : cfgResumen&&porGrupoYCuentaReal
     ? filasAperturaPorGrupoYCuentaReal(cuenta,cfgResumen,txs,clasFn,mesesSel)
-    : cfgResumen
-    ? filasAperturaResumenPorGrupo(cuenta,cfgResumen,grupos,conceptos,mesesSel)
-    : topProveedores
-    ? filasAperturaTopProveedores(cuenta,grupos,conceptos,mesesSel,topProveedores)
-    : conceptos.map((k,idx)=>{
-        const cells=mesesSel.map(m=>{ const v=grupos[k].porMes[m]||0; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-        const kEsc=esc(k).replace(/'/g,"\\'"), cEsc=esc(cuenta).replace(/'/g,"\\'");
-        const up=idx>0?`<span onclick="moverConceptoApertura('${cEsc}','${kEsc}',-1)" title="Subir" style="cursor:pointer;padding:0 2px">▲</span>`:`<span style="opacity:.2;padding:0 2px">▲</span>`;
-        const down=idx<conceptos.length-1?`<span onclick="moverConceptoApertura('${cEsc}','${kEsc}',1)" title="Bajar" style="cursor:pointer;padding:0 2px">▼</span>`:`<span style="opacity:.2;padding:0 2px">▼</span>`;
-        return `<tr><td class="fz fz1 ell" style="max-width:none" title="${esc(k)}">${up}${down} ${esc(k)}</td>${cells}<td class="fzr${signoCls(grupos[k].ars)}" style="text-align:right"><b>${fmt(grupos[k].ars)}</b></td><td class="fzr mut" style="text-align:right">${grupos[k].n}</td></tr>`;
-      }).join("")) || filaVacia;
+    : filasAperturaPorRamas(cuenta,cfgResumen,topProveedores,txs,clasFn,conceptos,mesesSel)) || filaVacia;
   // Pto de la cuenta mes a mes, para comparar contra el real de esta apertura. Si hay Pto cargado
   // por concepto (APERTURA_PTO, ver mas abajo) se usa la suma de esos -- asi cada proveedor puede
   // tener su propia vigencia (ej. el alquiler que se da de baja en julio por la compra del terreno).
@@ -1151,6 +1145,7 @@ function renderPtoApertura(){
     :`Desglose transacción por transacción del "02-EERR" para "${esc(cuenta)}"${grupoSel?" ("+esc(grupoSel)+")":""}, agrupado por concepto y mes según la regla que definimos para esta cuenta.`;
   document.getElementById("paFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">${encabezadoNota}${notaResumen} La fila "Pto" muestra el presupuesto mensual (suma de los Pto por concepto de más abajo, si ya están cargados; vacío en los meses sin ninguna vigencia todavía) y la fila "Desvío" la diferencia Pto − real de cada mes — en <span class="under">verde</span> cuando el real vino por debajo del Pto, en <span class="over">rojo</span> cuando lo superó; la columna Total de ambas es la suma de los meses que se ven arriba (Desde/Hasta).<br><span class="mut" style="font-size:11px">${esc(etiquetaFiltroApertura(cuenta))} real por concepto (diagnóstico, todos los meses cargados, no solo los de arriba): ${debugTxt||"–"}</span><br><span class="mut" style="font-size:11px">${esc(debugFiltro)}</span></div></details>`;
   renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur);
+  renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs);
   sincronizarAnchoPtoConcepto();
 }
 // Segunda tabla: Pto de CADA concepto mes a mes (no el real) -- muestra como se compone el Pto
@@ -1189,6 +1184,47 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur){
   requestAnimationFrame(()=>{ actualizarStickyPto("paPtoTabla"); actualizarStickyPtoDerecha("paPtoTabla"); });
   const notaMoneda=cur===1||cur===2?` En ${cur===1?"USD Oficial":"USD Billete"}, cada concepto se valoriza una sola vez al tipo de cambio del último día del mes en que arranca su vigencia y se mantiene igual en USD (no se ajusta por inflación).`:(cur===3?" En AXI, cada mes se lleva a pesos del mes ancla con el factor AXI de ese mes.":"");
   foot.innerHTML=`Presupuesto de cada concepto de "${esc(cuenta)}", mes a mes, ajustado por inflación desde el mes de cada vigencia (mismo criterio que Presupuesto·Estructura).${notaMoneda} Se administra por Historial de cambios; avisame los valores y las fechas de vigencia y los cargo.`;
+}
+/* 2026-10-05 -- "Gastos según informe de Estructura" (a pedido de Micaela): debajo de "Pto por concepto", el
+   gasto real de las cuentas reales de esta apertura tal como lo muestra el informe de Presupuesto·Estructura
+   (CONFIG_PTO.serie, que sale del mismo crudo y del mismo grupo "K) ESTRUCTURA"/"K) ESTRUCTURA NQN" que el
+   Estado de Resultados), una fila por rama -- Estructura y Estructura NQN SIEMPRE separadas. Sirve para
+   comparar contra el total de cada rama de la apertura (fila "Diferencia"), y la suma de estas filas en
+   TODAS las cuentas da el total de Estructura / Estructura NQN del Estado de Resultados. Verificado contra el
+   crudo abr-25..ago-26: Estado de Resultados = Presupuesto·Estructura = suma de todas las aperturas, en las
+   dos ramas y en las 4 monedas. Misma moneda que el resto de la pantalla (serie[cur]). No aplica a "⚠
+   Estructura sin detalle" (ya es justamente lo que falta cubrir). */
+const GRUPOS_INFORME_ESTRUCTURA=[{grupo:"K) ESTRUCTURA",label:"Estructura"},{grupo:"K) ESTRUCTURA NQN",label:"Estructura NQN"}];
+function renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs){
+  const wrap=document.getElementById("paInfWrap"), tabla=document.getElementById("paInfTabla"), foot=document.getElementById("paInfFoot");
+  if(!wrap||!tabla) return;
+  if(cuenta===APERTURA_COBERTURA_CUENTA||!mesesSel.length){ wrap.style.display="none"; foot.innerHTML=""; return; }
+  const reales=new Set((APERTURA_CUENTAS_MAP[cuenta]||[]).map(normApertura));
+  const filtroFn=APERTURA_FILTRO_FN[cuenta]; // cuentas con eje propio (Cta Part Socios: por socio)
+  const cfgs=CONFIG_PTO.filter(c=>reales.has(normApertura(c.cuenta))&&(!filtroFn||!grupoSel||normApertura(filtroFn({cuenta:c.cuenta}))===normApertura(grupoSel)));
+  const tol=(cur===1||cur===2)?0.01:0.5;
+  const filas=[]; let hay=false;
+  GRUPOS_INFORME_ESTRUCTURA.forEach(G=>{
+    if(grupoSel&&!filtroFn&&normApertura(grupoSel)!==normApertura(G.grupo)) return; // el filtro Grupo ya eligio una rama
+    const informe=mesesSel.map(m=>cfgs.filter(c=>c.grupo===G.grupo).reduce((s,c)=>s+(((c.serie||{})[m]||[])[cur]||0),0));
+    const apert=mesesSel.map(m=>txs.reduce((s,t)=>s+(t.mes===m&&normApertura(t.grupo)===normApertura(G.grupo)?t.ars:0),0));
+    const totI=informe.reduce((a,b)=>a+b,0), totA=apert.reduce((a,b)=>a+b,0);
+    if(Math.abs(totI)<tol&&Math.abs(totA)<tol) return; // la cuenta no tiene nada en esta rama: no se muestra
+    hay=true;
+    const dif=apert.map((v,i)=>v-informe[i]), totD=totA-totI;
+    const cI=informe.map(v=>`<td class="mescol info${signoCls(v)}" style="text-align:right">${Math.abs(v)<tol?"–":fmt(v)}</td>`).join("");
+    const cD=dif.map(v=>`<td class="mescol info${Math.abs(v)<tol?"":" over"}" style="text-align:right">${Math.abs(v)<tol?"–":fmt(v)}</td>`).join("");
+    filas.push(`<tr><td class="fz fz1 info">Gastos según informe de ${esc(G.label)}</td>${cI}<td class="fzr info${signoCls(totI)}" style="text-align:right"><b>${Math.abs(totI)<tol?"–":fmt(totI)}</b></td><td class="fzr info"></td></tr>`);
+    filas.push(`<tr><td class="fz fz1 info" style="padding-left:22px">Diferencia vs. Apertura (${esc(G.label)})</td>${cD}<td class="fzr info${Math.abs(totD)<tol?"":" over"}" style="text-align:right"><b>${Math.abs(totD)<tol?"–":fmt(totD)}</b></td><td class="fzr info"></td></tr>`);
+  });
+  if(!hay){ wrap.style.display="none"; foot.innerHTML=""; return; }
+  wrap.style.display="";
+  const monthHdr=mesesSel.map(m=>`<th class="mescol">${mesLabel(m)}</th>`).join("");
+  tabla.className="grid";
+  tabla.innerHTML=`<thead><tr><th class="fz fz1">Informe de Estructura</th>${monthHdr}<th class="fzr" style="text-align:right">Total</th><th class="fzr"></th></tr></thead><tbody>${filas.join("")}</tbody>`;
+  colResizeInit(tabla);
+  requestAnimationFrame(()=>{ actualizarStickyPto("paInfTabla"); actualizarStickyPtoDerecha("paInfTabla"); });
+  foot.innerHTML=`Gasto real de las cuentas de "${esc(cuenta)}" según el informe de Presupuesto·Estructura (el mismo total por rama que el Estado de Resultados), con Estructura y Estructura NQN siempre separadas. "Diferencia" = total de la rama en esta Apertura − informe: en "–" cuando coinciden. La suma de estas filas en todas las cuentas da el total de Estructura del Estado de Resultados.`;
 }
 window.cfgChange=function(f,v){if(!OVERRIDES.__cfg__)OVERRIDES.__cfg__={fechaBase:FECHA_BASE_DEFAULT_YM,tcOf:1455,tcBill:1435};OVERRIDES.__cfg__[f]=(f==="fechaBase")?v:(parseFloat(v)||0);saveOverrides();renderPto();};
 // Meses disponibles + "extra" meses futuros (para poder declarar una vigencia de Pto que todavia
@@ -1447,23 +1483,28 @@ function colResizeSave(table, ths){
 // a "Total ARS" y "Asientos" de paTabla -- el espaciador es lo que permite que "Total" quede alineado
 // bajo "Total ARS" en vez de quedar corrido (paPtoTabla, sin el, seria mas angosta que paTabla).
 function sincronizarAnchoPtoConcepto(){
-  const principal=document.getElementById("paTabla"), pto=document.getElementById("paPtoTabla");
-  if(!principal||!pto) return;
-  const thsP=[...principal.querySelectorAll("thead th")], thsPto=[...pto.querySelectorAll("thead th")];
-  if(thsP.length<2||thsPto.length<2) return;
-  pto.style.tableLayout="fixed";
-  const n=thsPto.length-2; // Concepto + meses (todas menos las ultimas 2: "Total" y el espaciador)
-  for(let i=0;i<n;i++){
-    if(!thsP[i]) break;
-    thsPto[i].style.width=thsP[i].getBoundingClientRect().width+"px";
-    thsPto[i].style.maxWidth="none";
-  }
-  // "Total" sigue a "Total ARS" (penultima de paTabla); el espaciador sigue a "Asientos" (la ultima).
-  [thsP[thsP.length-2],thsP[thsP.length-1]].forEach((th,i)=>{
-    if(!th) return;
-    const destino=thsPto[thsPto.length-2+i];
-    destino.style.width=th.getBoundingClientRect().width+"px";
-    destino.style.maxWidth="none";
+  const principal=document.getElementById("paTabla");
+  if(!principal) return;
+  const thsP=[...principal.querySelectorAll("thead th")];
+  if(thsP.length<2) return;
+  ["paPtoTabla","paInfTabla"].forEach(id=>{
+    const pto=document.getElementById(id); if(!pto) return;
+    const thsPto=[...pto.querySelectorAll("thead th")];
+    if(thsPto.length<2) return;
+    pto.style.tableLayout="fixed";
+    const n=thsPto.length-2; // Concepto + meses (todas menos las ultimas 2: "Total" y el espaciador)
+    for(let i=0;i<n;i++){
+      if(!thsP[i]) break;
+      thsPto[i].style.width=thsP[i].getBoundingClientRect().width+"px";
+      thsPto[i].style.maxWidth="none";
+    }
+    // "Total" sigue a "Total ARS" (penultima de paTabla); el espaciador sigue a "Asientos" (la ultima).
+    [thsP[thsP.length-2],thsP[thsP.length-1]].forEach((th,i)=>{
+      if(!th) return;
+      const destino=thsPto[thsPto.length-2+i];
+      destino.style.width=th.getBoundingClientRect().width+"px";
+      destino.style.maxWidth="none";
+    });
   });
 }
 // A diferencia de Compras (tablas que se arman una vez), #pTabla reconstruye TODO su innerHTML en
@@ -2486,10 +2527,12 @@ function resolverOrdenApertura(cuenta,grupos){
   if(JSON.stringify(orden)!==JSON.stringify(APERTURA_ORDEN[cuenta]||[])){ APERTURA_ORDEN[cuenta]=orden; guardarClave('APERTURA_ORDEN',APERTURA_ORDEN); }
   return orden;
 }
-function moverConceptoApertura(cuenta,concepto,dir){
+function moverConceptoApertura(cuenta,concepto,dir,vecino){
   const orden=APERTURA_ORDEN[cuenta]; if(!orden) return;
   const i=orden.indexOf(concepto); if(i<0) return;
-  const j=i+dir; if(j<0||j>=orden.length) return;
+  // "vecino": con ramas por Grupo (filasAperturaPorRamas) cada rama muestra solo SUS conceptos, asi que
+  // el vecino visible no es el de al lado en el orden global de la cuenta -- se intercambia con ese.
+  const j=vecino!=null?orden.indexOf(vecino):i+dir; if(j<0||j>=orden.length) return;
   [orden[i],orden[j]]=[orden[j],orden[i]];
   guardarClave('APERTURA_ORDEN',APERTURA_ORDEN);
   renderPtoApertura();
@@ -2983,12 +3026,83 @@ function filasAperturaPorGrupoYCuentaReal(cuenta,cfgGrupo,txs,clasFn,mesesSel){
     return filaGrupo+filasAux06;
   }).join("")||"";
 }
+/* 2026-10-05 -- Ramas por Grupo (Aux 02) en las cuentas "simples" (a pedido de Micaela: "Estructura y
+   Estructura NQN como primera rama, siempre separadas" tambien en las ~40 cuentas simples, no solo en los
+   bienes de uso). Primer nivel: Estructura, Estructura NQN, Inversion (M) INVERSIONES) -- mismo criterio y
+   mismas etiquetas que Muebles y Utiles/Rodados/Herramientas/Mantenimiento Bs de Uso -- y despues, una rama
+   por cada OTRO Grupo que aparezca en la cuenta (ej. "A) CMV VENTA", "P) PROVEEDORES"), ordenadas por
+   importe. Cada rama lleva su subtotal por mes y arranca colapsada (como el resto de Apertura; "Expandir
+   todo" las abre); adentro queda el detalle de siempre de cada cuenta (conceptos con flechas subir/bajar,
+   o los buckets de Movilidad Combustible, o el top de proveedores de Food & Bev). Quedan afuera las
+   cuentas que ya abren por otro eje: Cta Part Socios (primero cuenta real) y los 4 bienes de uso (ya
+   abren por Grupo). El orden manual de conceptos (APERTURA_ORDEN) sigue siendo UNO por cuenta: cada rama
+   muestra sus conceptos en ese mismo orden. Verificado contra el crudo abr-25..ago-26: el subtotal de la
+   rama Estructura de cada cuenta coincide con su gasto en Presupuesto·Estructura. */
+const APERTURA_RAMAS_SIMPLE=[
+  {label:"Estructura",grupos:["K) ESTRUCTURA"]},
+  {label:"Estructura NQN",grupos:["K) ESTRUCTURA NQN"]},
+  {label:"Inversión",grupos:["M) INVERSIONES"]}
+];
+function filasConceptosSimples(cuenta,grupos,conceptos,mesesSel,basePx){
+  return conceptos.map((k,idx)=>{
+    const cells=mesesSel.map(m=>{ const v=grupos[k].porMes[m]||0; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
+    const kEsc=esc(k).replace(/'/g,"\\'"), cEsc=esc(cuenta).replace(/'/g,"\\'");
+    const vEsc=n=>esc(conceptos[n]).replace(/'/g,"\\'");
+    const up=idx>0?`<span onclick="moverConceptoApertura('${cEsc}','${kEsc}',-1,'${vEsc(idx-1)}')" title="Subir" style="cursor:pointer;padding:0 2px">▲</span>`:`<span style="opacity:.2;padding:0 2px">▲</span>`;
+    const down=idx<conceptos.length-1?`<span onclick="moverConceptoApertura('${cEsc}','${kEsc}',1,'${vEsc(idx+1)}')" title="Bajar" style="cursor:pointer;padding:0 2px">▼</span>`:`<span style="opacity:.2;padding:0 2px">▼</span>`;
+    return `<tr><td class="fz fz1 ell" style="max-width:none${basePx?";padding-left:"+basePx+"px":""}" title="${esc(k)}">${up}${down} ${esc(k)}</td>${cells}<td class="fzr${signoCls(grupos[k].ars)}" style="text-align:right"><b>${fmt(grupos[k].ars)}</b></td><td class="fzr mut" style="text-align:right">${grupos[k].n}</td></tr>`;
+  }).join("");
+}
+function filasAperturaPorRamas(cuenta,cfgResumen,topProveedores,txs,clasFn,conceptosGlobal,mesesSel){
+  const totalDe=arr=>arr.reduce((s,t)=>s+t.ars,0);
+  const porGrupoReal={};
+  txs.forEach(t=>{ const g=t.grupo||"(sin grupo)"; (porGrupoReal[g]||(porGrupoReal[g]=[])).push(t); });
+  const ramas=APERTURA_RAMAS_SIMPLE.map(b=>({label:b.label,txs:[]}));
+  const extra={};
+  Object.keys(porGrupoReal).forEach(g=>{
+    const idx=APERTURA_RAMAS_SIMPLE.findIndex(b=>bucketMatch(b,g));
+    const dest=idx>=0?ramas[idx]:(extra[g]||(extra[g]={label:g,txs:[]}));
+    dest.txs.push(...porGrupoReal[g]);
+  });
+  const todas=[...ramas.filter(r=>r.txs.length),...Object.values(extra).sort((a,b)=>totalDe(b.txs)-totalDe(a.txs))];
+  return todas.map(rama=>{
+    const clave="GRUPO·"+rama.label;
+    const abierto=estaAbiertoApertura(cuenta,clave);
+    const porMes={}; rama.txs.forEach(t=>{ porMes[t.mes]=(porMes[t.mes]||0)+t.ars; });
+    const total=totalDe(rama.txs);
+    const cells=mesesSel.map(m=>{ const v=porMes[m]||0; return `<td class="mescol${signoCls(v)}" style="text-align:right"><b>${v?fmt(v):"–"}</b></td>`; }).join("");
+    const cEsc=esc(cuenta).replace(/'/g,"\\'"), clEsc=esc(clave).replace(/'/g,"\\'");
+    const flecha=`<span onclick="toggleResumenApertura('${cEsc}','${clEsc}')" title="${abierto?"Ocultar":"Ver"} detalle" style="cursor:pointer;padding:0 4px">${abierto?"▾":"▸"}</span>`;
+    const fila=`<tr class="result"><td class="fz fz1"><b>${flecha}${esc(rama.label)}</b></td>${cells}<td class="fzr${signoCls(total)}" style="text-align:right"><b>${fmt(total)}</b></td><td class="fzr mut" style="text-align:right">${rama.txs.length}</td></tr>`;
+    if(!abierto) return fila;
+    // Conceptos de ESTA rama (mismo criterio que renderPtoApertura para toda la cuenta).
+    const grupos={};
+    rama.txs.forEach(t=>{
+      const concepto=clasFn(t)||"Otros";
+      if(!grupos[concepto]) grupos[concepto]={ars:0,n:0,porMes:{},esProveedor:t.origen==="Compras"};
+      grupos[concepto].ars+=t.ars; grupos[concepto].n++;
+      grupos[concepto].porMes[t.mes]=(grupos[concepto].porMes[t.mes]||0)+t.ars;
+    });
+    const conceptos=topProveedores
+      ? Object.keys(grupos).sort((x,y)=>grupos[y].ars-grupos[x].ars) // el top N es DE ESTA rama
+      : conceptosGlobal.filter(k=>grupos[k]); // mismo orden manual que el resto de la cuenta
+    const prefijo=clave+"·";
+    const hijos=cfgResumen
+      ? filasAperturaResumenPorGrupo(cuenta,cfgResumen,grupos,conceptos,mesesSel,prefijo)
+      : topProveedores
+      ? filasAperturaTopProveedores(cuenta,grupos,conceptos,mesesSel,topProveedores,prefijo)
+      : filasConceptosSimples(cuenta,grupos,conceptos,mesesSel,22);
+    return fila+hijos;
+  }).join("");
+}
 // Cuentas con muchos proveedores distintos (ej. "Food & Bev"): a pedido de Micaela, Compras se abre
 // por proveedor como siempre, pero solo se listan los N con mas movimiento -- el resto se junta en
 // una fila "Otros" colapsable (misma flecha que los buckets de Grupo). Los conceptos que no son de
 // Compras (el resto de los modulos) se muestran aparte, abajo, sin desglosar mas.
 const APERTURA_TOP_PROVEEDORES={"Food & Bev":25};
-function filasAperturaTopProveedores(cuenta,grupos,conceptos,mesesSel,topN){
+function filasAperturaTopProveedores(cuenta,grupos,conceptos,mesesSel,topN,prefijoClave){
+  prefijoClave=prefijoClave||"";
+  const baseIndent=prefijoClave?22:0; // anidado adentro de una rama de Grupo: un escalon mas
   // "conceptos" ya viene ordenado por importe descendente (resolverOrdenApertura), asi que separar
   // proveedores de modulos preservando ese orden alcanza para tomar el top N tal cual.
   const proveedores=conceptos.filter(k=>grupos[k].esProveedor);
@@ -2996,17 +3110,18 @@ function filasAperturaTopProveedores(cuenta,grupos,conceptos,mesesSel,topN){
   const top=proveedores.slice(0,topN), resto=proveedores.slice(topN);
   const filaConcepto=(k,indent)=>{
     const cells=mesesSel.map(m=>{ const v=grupos[k].porMes[m]||0; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-    return `<tr><td class="fz fz1 ell" style="max-width:none${indent?";padding-left:22px":""}" title="${esc(k)}">${esc(k)}</td>${cells}<td class="fzr${signoCls(grupos[k].ars)}" style="text-align:right">${fmt(grupos[k].ars)}</td><td class="fzr mut" style="text-align:right">${grupos[k].n}</td></tr>`;
+    const pad=baseIndent+(indent?22:0);
+    return `<tr><td class="fz fz1 ell" style="max-width:none${pad?";padding-left:"+pad+"px":""}" title="${esc(k)}">${esc(k)}</td>${cells}<td class="fzr${signoCls(grupos[k].ars)}" style="text-align:right">${fmt(grupos[k].ars)}</td><td class="fzr mut" style="text-align:right">${grupos[k].n}</td></tr>`;
   };
   let html=top.map(k=>filaConcepto(k,false)).join("");
   if(resto.length){
-    const claveOtros="__otros_proveedores__";
+    const claveOtros=prefijoClave+"__otros_proveedores__";
     const abierto=estaAbiertoApertura(cuenta,claveOtros);
     const cEsc=esc(cuenta).replace(/'/g,"\\'");
     const flecha=`<span onclick="toggleResumenApertura('${cEsc}','${claveOtros}')" title="${abierto?"Ocultar":"Ver"} detalle" style="cursor:pointer;padding:0 4px">${abierto?"▾":"▸"}</span>`;
     const totalOtros=resto.reduce((s,k)=>s+grupos[k].ars,0), nOtros=resto.reduce((s,k)=>s+grupos[k].n,0);
     const cellsOtros=mesesSel.map(m=>{ const v=resto.reduce((s,k)=>s+(grupos[k].porMes[m]||0),0); return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-    html+=`<tr class="result"><td class="fz fz1"><b>${flecha}Otros (${resto.length} proveedores)</b></td>${cellsOtros}<td class="fzr${signoCls(totalOtros)}" style="text-align:right"><b>${fmt(totalOtros)}</b></td><td class="fzr mut" style="text-align:right">${nOtros}</td></tr>`;
+    html+=`<tr class="result"><td class="fz fz1"${baseIndent?` style="padding-left:${baseIndent}px"`:""}><b>${flecha}Otros (${resto.length} proveedores)</b></td>${cellsOtros}<td class="fzr${signoCls(totalOtros)}" style="text-align:right"><b>${fmt(totalOtros)}</b></td><td class="fzr mut" style="text-align:right">${nOtros}</td></tr>`;
     if(abierto) html+=resto.map(k=>filaConcepto(k,true)).join("");
   }
   html+=modulos.map(k=>filaConcepto(k,false)).join("");
