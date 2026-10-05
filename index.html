@@ -3322,7 +3322,37 @@ function agregarVigenciaApertura(cuenta,concepto,desde,pto){
   saveAperturaPto();
 }
 window.agregarVigenciaApertura=agregarVigenciaApertura;
+/* 2026-10-05 -- Presupuesto·Estructura siempre cuadra con el Estado de Resultados (a pedido de Micaela).
+   CONFIG_PTO es una lista fija de cuentas (Cuenta + Grupo) y mergePtoRealIntoConfig solo actualiza las que
+   ya existen: una cuenta que aparece por primera vez en el crudo con Grupo "K) ESTRUCTURA"/"K) ESTRUCTURA
+   NQN" no se veia en Presupuesto y el total de la rama quedaba corto respecto del EERR (abr-26..ago-26:
+   Seguros NQN 2.163.784, EPP NQN 821.322 y Patente Automotor RODADOS NQN 644.604 = 3.629.709 de NQN; y
+   las 3 cuentas de la Ley 25413 en Estructura, que netean cero). Ahora, al cargar el crudo, cada
+   (Cuenta, Grupo) con movimientos que no este en CONFIG_PTO se agrega con Pto 0, base mensual y SIN
+   responsable (no se inventa uno: se asigna a mano), y con la misma convencion de key que las demas
+   ("NQN·Cuenta" para NQN). Los meses bloqueados (HIST_LOCK) no se tocan, como siempre. Devuelve las
+   cuentas agregadas para avisarlo en el mensaje de la carga. */
+function agregarCuentasNuevasAConfigPto(resCuentas){
+  const existentes=new Set(CONFIG_PTO.map(c=>c.cuenta+"\u241F"+c.grupo));
+  const keys=new Set(CONFIG_PTO.map(c=>c.key));
+  const nuevas=[];
+  Object.keys(resCuentas.cuentas).sort().forEach(k=>{
+    const i=k.lastIndexOf("\u241F"), cuenta=k.slice(0,i), grupo=k.slice(i+1);
+    if(grupo!=="K) ESTRUCTURA"&&grupo!=="K) ESTRUCTURA NQN") return;
+    if(existentes.has(k)) return;
+    if(!Object.values(resCuentas.cuentas[k]).some(v=>Math.abs(v[0])>0.005)) return;
+    let key=grupo==="K) ESTRUCTURA NQN"?"NQN·"+cuenta:cuenta;
+    while(keys.has(key)) key+="*";
+    keys.add(key);
+    CONFIG_PTO.push({cuenta,grupo,key,responsable:null,legajo:null,base:"mensual",pto_sugerido:0,real_12m:0,prom_mensual:0,serie:{}});
+    if(!OVERRIDES[key]) OVERRIDES[key]={base:"mensual",historial:[{desde:FECHA_BASE_DEFAULT_YM,pto:0}]};
+    nuevas.push(cuenta+" ("+(grupo==="K) ESTRUCTURA NQN"?"NQN":"Estructura")+")");
+  });
+  return nuevas;
+}
+let CUENTAS_NUEVAS_PTO=[];
 function mergePtoRealIntoConfig(resCuentas){
+  CUENTAS_NUEVAS_PTO=agregarCuentasNuevasAConfigPto(resCuentas);
   // Misma logica que mergeEERRIntoData: el archivo reemplaza (no mezcla) los meses no bloqueados
   // que cubre -- si una cuenta no tiene movimientos ese mes en el archivo nuevo, queda en 0 (no se
   // arrastra el valor de una carga anterior). Los meses bloqueados por HIST_LOCK no se tocan.
@@ -4010,6 +4040,7 @@ async function onCargarInformeCrudo(file){
     if(nPend) m2+=` ⚠ ${nPend} filas sin cotizacion completa (fechas sin historico ni dato en vivo) — no se inventaron valores, quedaron en 0 para esas filas.`;
     if(nIgnor) m2+=` ${nIgnor} filas con grupo no reconocido, ignoradas: ${Object.keys(res.gruposIgnorados).join(", ")}.`;
     m2+=" Presupuesto·Estructura actualizado: "+nCuentas+" cuentas.";
+    if(CUENTAS_NUEVAS_PTO.length) m2+=` ➕ ${CUENTAS_NUEVAS_PTO.length} cuenta(s) nueva(s) agregada(s) a Presupuesto·Estructura, sin responsable y con Pto 0: ${CUENTAS_NUEVAS_PTO.join(", ")}.`;
     m2+=" Proyectos/CMV actualizado: "+resC.aperturas.length+" aperturas (proyectos + buckets compartidos).";
     if(resC.avisos.length) m2+=` ⚠ ${resC.avisos.length} proyectos de Ventas/CMV (según Compras) con asientos mal clasificados en el 02-EERR: revisar en la pestaña Proyectos·CMV.`;
     m2+=" Guardado en Supabase: la proxima vez que abras la app, ya va a estar cargado.";
