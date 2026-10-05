@@ -701,12 +701,13 @@ async function initPto(){
       // El input muestra el Pto en pesos de la "fecha base" (ver renderPto); al editarlo se
       // reconvierte a los pesos propios del "desde" de la ultima vigencia antes de guardar, para
       // no perder la denominacion original de esa vigencia.
-      const mostrado=(parseFloat(String(e.target.value).replace(/\./g,"").replace(/,/g,"."))||0)/(window.curPtoFac||1);
+      const mostrado=(parseFloat(String(e.target.value).replace(/\./g,"").replace(/,/g,"."))||0);
       const h=OVERRIDES[c].historial;
       if(h&&h.length){
         const ult=h[h.length-1];
         const fechaBase=(OVERRIDES.__cfg__&&OVERRIDES.__cfg__.fechaBase)||FECHA_BASE_DEFAULT_YM;
-        ult.pto=pesosEnMes(mostrado,fechaBase,ult.desde);
+        const nuevo=ptoDesdeMoneda(mostrado,window.ptoEditCur||0,ult.desde,fechaBase);
+        if(nuevo!=null) ult.pto=nuevo;
       }
     }
     saveOverrides();renderPto();});
@@ -952,8 +953,8 @@ function initPtoApertura(){
        y APERTURA_ESTRUCTURA_TOTAL). Las transacciones cargadas ANTES de este cambio no lo tienen: se
        calcula en el momento con la fecha (Oficial y AXI dan igual; Billete puede diferir en asientos
        ContaParam/ContaOC sin correccion cargada) hasta que se vuelva a cargar el crudo de esos meses.
-     - Pto: en USD, mismo TC fijo de "Config Pto" que Presupuesto·Estructura; en AXI, el factor AXI de
-       cada mes (igual que el real) -- ver factorPtoMoneda.
+     - Pto: ver ptoVigenciaEnMoneda (USD = valor fijo al TC del ultimo dia del mes de la vigencia; AXI =
+       factor AXI de cada mes, igual que el real).
    La conversion se hace sobre una COPIA de cada transaccion (ars = importe en la moneda elegida,
    ars0 = pesos originales, fx = ars/ars0), asi todas las variantes de tabla de abajo siguen sumando
    "ars" sin cambios; aux2ItemsParaTx parte por importe usando ars0 (pesos) para no romper el match. */
@@ -976,16 +977,39 @@ function convertirTxApertura(t,cur){
   const v=monedaTxApertura(t,cur);
   return {...t,ars:v,ars0:t.ars,fx:t.ars?v/t.ars:0};
 }
-// AXI (2026-10-04, observacion de Micaela): el Pto de cada mes esta en pesos NOMINALES de ese mes
-// (pesosEnMes lo escala por FACPCE desde su vigencia), asi que para compararlo contra el real en AXI
-// hay que llevarlo a pesos del mes ancla con el mismo factor del mes que el real (axiFactorFor). Antes
-// se dejaba con factor 1 y el Pto AXI quedaba igual al nominal mientras el real si se ajustaba.
-function factorPtoMoneda(cur,ym){
-  if(cur===3){ const f=ym?axiFactorFor(ym):null; return f!=null?f:1; }
-  const CFG=OVERRIDES.__cfg__||{tcOf:1455,tcBill:1435};
-  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;
-  return [1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1][cur]||1;
+/* Pto en cada moneda (2026-10-04, criterio de Micaela) -- sirve para Presupuesto·Estructura y Apertura:
+     - Pesos: el Pto de cada mes en pesos nominales de ESE mes (pesosEnMes escala por FACPCE desde el
+       mes "desde" de la vigencia).
+     - AXI: ese mismo Pto llevado a pesos del mes ancla con el factor AXI de ese mes (igual que el real).
+     - USD Oficial / USD Billete: el Pto de la vigencia se valoriza UNA SOLA VEZ, al tipo de cambio del
+       ULTIMO DIA del mes "desde" de la vigencia (ej. abr-26 -> TC al 30/04/2026), y de ahi en adelante
+       es siempre el mismo valor en USD (no se ajusta por inflacion). Eso se compara contra el gasto de
+       cada mes expresado en esa moneda. Una vigencia nueva (otro "desde") se valoriza a SU propio TC.
+   El TC sale del mismo diccionario que el resto de la app (tcOficFor / tcBillFor, buscando hacia atras
+   si el dia no tiene cotizacion). Si no hay ninguno, cae al TC de respaldo de "Config Pto". */
+function ultimoDiaMesISO(ym){ const a=String(ym).split("-").map(Number); return new Date(Date.UTC(a[0],a[1],0)).toISOString().slice(0,10); }
+function tcPtoVigencia(cur,desdeYM){
+  const f=ultimoDiaMesISO(desdeYM);
+  const tc=cur===1?tcOficFor(f,"",0,0):tcBillFor(f,"",0,null);
+  if(tc) return tc;
+  const CFG=OVERRIDES.__cfg__||{};
+  return (cur===1?+CFG.tcOf:+CFG.tcBill)||null;
 }
+function ptoVigenciaEnMoneda(v,cur,ym){
+  if(!v) return 0;
+  if(cur===1||cur===2){ const tc=tcPtoVigencia(cur,v.desde); return tc?v.pto/tc:0; }
+  const p=pesosEnMes(v.pto,v.desde,ym);
+  if(cur===3){ const f=axiFactorFor(ym); return p*(f!=null?f:1); }
+  return p;
+}
+// Inverso de ptoVigenciaEnMoneda: de un valor mostrado en "cur" (a la fecha "ym") a pesos del mes "desde".
+function ptoDesdeMoneda(valor,cur,desdeYM,ym){
+  if(cur===1||cur===2){ const tc=tcPtoVigencia(cur,desdeYM); return tc?valor*tc:null; }
+  const f=cur===3?axiFactorFor(ym):1;
+  return pesosEnMes(valor/(f!=null&&f?f:1),ym,desdeYM);
+}
+function ptoEnMesMoneda(key,ym,cur){ return ptoVigenciaEnMoneda(ptoVigente(key,ym),cur,ym); }
+function aperturaPtoEnMesMoneda(cuenta,concepto,ym,cur){ return ptoVigenciaEnMoneda(aperturaPtoVigente(cuenta,concepto,ym),cur,ym); }
 function renderPtoApertura(){
   const sel=document.getElementById("paCuenta"); if(!sel) return;
   const cuenta=sel.value;
@@ -1003,7 +1027,7 @@ function renderPtoApertura(){
   const mesesSelSet=new Set(mesesSel);
   const cur=+((document.getElementById("paMoneda")||{}).value||0);
   const txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
-  const fPto=m=>factorPtoMoneda(cur,m), curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
+  const curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
   // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
   // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
   const nBillAprox=cur===2?todasT.filter(t=>mesesSelSet.has(t.mes)&&t.usdBi==null).length:0;
@@ -1070,8 +1094,8 @@ function renderPtoApertura(){
   const ovCuenta=OVERRIDES[cuenta];
   const baseCuenta=ovCuenta?ovCuenta.base:"mensual";
   const ptoMesFn=m=>{
-    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMes(cuenta,k,m),0)*fPto(m);
-    const v=ptoEnMes(cuenta,m,fPto(m)); return baseCuenta==="anual"?v/12:v;
+    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMesMoneda(cuenta,k,m,cur),0);
+    const v=ptoEnMesMoneda(cuenta,m,cur); return baseCuenta==="anual"?v/12:v;
   };
   const ptoPorMes=mesesSel.map(ptoMesFn);
   const totCells=colTot.map((v,i)=>{
@@ -1126,7 +1150,7 @@ function renderPtoApertura(){
     ?`Cuentas reales con Grupo "K) ESTRUCTURA"/"K) ESTRUCTURA NQN" en el crudo que TODAVÍA no están mapeadas en ninguna Apertura de Estructura (ver APERTURA_CUENTAS_MAP) -- si una cuenta que ves acá ya tiene su propia Apertura, revisá que su nombre real esté bien escrito en el mapeo. El desglose es agregado por mes (no transacción por transacción como el resto de esta pantalla) y "Asientos" cuenta combinaciones cuenta+mes con movimiento, no comprobantes.`
     :`Desglose transacción por transacción del "02-EERR" para "${esc(cuenta)}"${grupoSel?" ("+esc(grupoSel)+")":""}, agrupado por concepto y mes según la regla que definimos para esta cuenta.`;
   document.getElementById("paFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">${encabezadoNota}${notaResumen} La fila "Pto" muestra el presupuesto mensual (suma de los Pto por concepto de más abajo, si ya están cargados; vacío en los meses sin ninguna vigencia todavía) y la fila "Desvío" la diferencia Pto − real de cada mes — en <span class="under">verde</span> cuando el real vino por debajo del Pto, en <span class="over">rojo</span> cuando lo superó; la columna Total de ambas es la suma de los meses que se ven arriba (Desde/Hasta).<br><span class="mut" style="font-size:11px">${esc(etiquetaFiltroApertura(cuenta))} real por concepto (diagnóstico, todos los meses cargados, no solo los de arriba): ${debugTxt||"–"}</span><br><span class="mut" style="font-size:11px">${esc(debugFiltro)}</span></div></details>`;
-  renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto);
+  renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur);
   sincronizarAnchoPtoConcepto();
 }
 // Segunda tabla: Pto de CADA concepto mes a mes (no el real) -- muestra como se compone el Pto
@@ -1134,8 +1158,8 @@ function renderPtoApertura(){
 // Usa los conceptos que tienen Pto cargado (APERTURA_PTO), no los de la tabla de arriba -- para que
 // un concepto dado de baja (sin transacciones en el rango visible) siga mostrando su fila. Si hay un
 // Grupo elegido arriba, se acota a los conceptos de ese Grupo (ver aperturaPtoGrupoDe).
-function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
-  if(typeof fPto!=="function") fPto=()=>1;
+function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur){
+  cur=+cur||0;
   const wrap=document.getElementById("paPtoWrap"), tabla=document.getElementById("paPtoTabla"), foot=document.getElementById("paPtoFoot");
   let ptoKeys=Object.keys(APERTURA_PTO[cuenta]||{});
   if(grupoSel) ptoKeys=ptoKeys.filter(k=>normApertura(aperturaPtoFiltroDe(cuenta,k))===normApertura(grupoSel));
@@ -1148,8 +1172,8 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
   wrap.style.display="";
   const colTot=mesesSel.map(()=>0);
   const rowsHtml=conConceptoPto.map(k=>{
-    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMes(cuenta,k,m)*fPto(m); colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
-    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMes(cuenta,k,m)*fPto(m),0);
+    const cells=mesesSel.map((m,i)=>{ const v=aperturaPtoEnMesMoneda(cuenta,k,m,cur); colTot[i]+=v; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
+    const totalK=mesesSel.reduce((s,m)=>s+aperturaPtoEnMesMoneda(cuenta,k,m,cur),0);
     return `<tr><td class="fz fz1 ell" style="max-width:none" title="${esc(k)}">${esc(k)}</td>${cells}<td class="fzr${signoCls(totalK)}" style="text-align:right"><b>${fmt(totalK)}</b></td><td class="fzr"></td></tr>`;
   }).join("");
   const totCells=colTot.map(v=>`<td class="mescol${signoCls(v)}" style="text-align:right"><b>${v?fmt(v):"–"}</b></td>`).join("");
@@ -1163,7 +1187,8 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,fPto){
   tabla.innerHTML=`<thead><tr><th class="fz fz1">Pto por concepto</th>${monthHdr}<th class="fzr" style="text-align:right">Total</th><th class="fzr"></th></tr></thead><tbody>${rowsHtml}${totalRow}</tbody>`;
   colResizeInit(tabla);
   requestAnimationFrame(()=>{ actualizarStickyPto("paPtoTabla"); actualizarStickyPtoDerecha("paPtoTabla"); });
-  foot.innerHTML=`Presupuesto de cada concepto de "${esc(cuenta)}", mes a mes, ajustado por inflación desde el mes de cada vigencia (mismo criterio que Presupuesto·Estructura). Se administra por Historial de cambios; avisame los valores y las fechas de vigencia y los cargo.`;
+  const notaMoneda=cur===1||cur===2?` En ${cur===1?"USD Oficial":"USD Billete"}, cada concepto se valoriza una sola vez al tipo de cambio del último día del mes en que arranca su vigencia y se mantiene igual en USD (no se ajusta por inflación).`:(cur===3?" En AXI, cada mes se lleva a pesos del mes ancla con el factor AXI de ese mes.":"");
+  foot.innerHTML=`Presupuesto de cada concepto de "${esc(cuenta)}", mes a mes, ajustado por inflación desde el mes de cada vigencia (mismo criterio que Presupuesto·Estructura).${notaMoneda} Se administra por Historial de cambios; avisame los valores y las fechas de vigencia y los cargo.`;
 }
 window.cfgChange=function(f,v){if(!OVERRIDES.__cfg__)OVERRIDES.__cfg__={fechaBase:FECHA_BASE_DEFAULT_YM,tcOf:1455,tcBill:1435};OVERRIDES.__cfg__[f]=(f==="fechaBase")?v:(parseFloat(v)||0);saveOverrides();renderPto();};
 // Meses disponibles + "extra" meses futuros (para poder declarar una vigencia de Pto que todavia
@@ -1291,18 +1316,15 @@ window.togglePtoDetalle=togglePtoDetalle;
   const bloque=document.getElementById("pBloque").value;
   const cur=+document.getElementById("pMoneda").value;const curLbl=["$","US$","US$","$"][cur],curTag=["pesos","USD of.","USD bill.","AXI"][cur];
   const CFGd={fechaBase:FECHA_BASE_DEFAULT_YM,tcOf:1455,tcBill:1435};if(!OVERRIDES.__cfg__)OVERRIDES.__cfg__=Object.assign({},CFGd);const CFG=OVERRIDES.__cfg__;
-  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;const repFac=[1,tcOf?1/tcOf:0,tcBill?1/tcBill:0,1],fCur=repFac[cur];
-  // AXI (2026-10-04, a pedido de Micaela): el Pto de cada mes esta en pesos nominales de ese mes, asi que
-  // en AXI se lleva a pesos del mes ancla con el factor AXI de ESE mes (igual que el real, ver
-  // factorPtoMoneda). Antes quedaba con factor 1. El input "Pto" (en pesos de la fecha base) usa el factor
-  // de la fecha base, y window.curPtoFac lo deshace al editar, asi lo guardado sigue en pesos nominales.
-  const fPtoMes=m=>cur===3?factorPtoMoneda(3,m):fCur;
-  const fechaBaseYM0=CFG.fechaBase||FECHA_BASE_DEFAULT_YM;
-  window.curPtoFac=fPtoMes(fechaBaseYM0);
+  const tcOf=+CFG.tcOf||1,tcBill=+CFG.tcBill||1;
+  // Moneda del Pto: ver ptoVigenciaEnMoneda (USD = valor fijo al TC del ultimo dia del mes de la vigencia;
+  // AXI = factor AXI de cada mes). window.ptoEditCur le avisa al handler del input "Pto" en que moneda
+  // esta mostrado, para convertir de vuelta a pesos nominales al guardar.
+  window.ptoEditCur=cur;
   const fechaBaseYM=CFG.fechaBase||FECHA_BASE_DEFAULT_YM;
   {const ce=document.getElementById("ptoCfg");if(ce){
     const opcionesBase=mesesConFuturo(12).map(m=>`<option value="${m}"${m===fechaBaseYM?" selected":""}>${esc(mesLabel(m))}</option>`).join("");
-    ce.innerHTML=`<b style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.65">Config Pto</b><label style="display:inline-flex;align-items:center;gap:5px">Fecha base (inicio de ejercicio)<select onchange="window.cfgChange('fechaBase',this.value)" style="padding:4px 6px" ${editable?"":"disabled"}>${opcionesBase}</select></label><label style="display:inline-flex;align-items:center;gap:5px">TC 30/06 oficial<input type="number" step="0.01" value="${tcOf}" onchange="window.cfgChange('tcOf',this.value)" style="width:92px;padding:3px 6px" ${editable?"":"disabled"}></label><label style="display:inline-flex;align-items:center;gap:5px">blue<input type="number" step="0.01" value="${tcBill}" onchange="window.cfgChange('tcBill',this.value)" style="width:92px;padding:3px 6px" ${editable?"":"disabled"}></label>`;
+    ce.innerHTML=`<b style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.65">Config Pto</b><label style="display:inline-flex;align-items:center;gap:5px">Fecha base (inicio de ejercicio)<select onchange="window.cfgChange('fechaBase',this.value)" style="padding:4px 6px" ${editable?"":"disabled"}>${opcionesBase}</select></label><label style="display:inline-flex;align-items:center;gap:5px">TC respaldo oficial<input title="Solo se usa si falta la cotización del último día del mes de la vigencia"  type="number" step="0.01" value="${tcOf}" onchange="window.cfgChange('tcOf',this.value)" style="width:92px;padding:3px 6px" ${editable?"":"disabled"}></label><label style="display:inline-flex;align-items:center;gap:5px">blue<input type="number" step="0.01" value="${tcBill}" onchange="window.cfgChange('tcBill',this.value)" style="width:92px;padding:3px 6px" ${editable?"":"disabled"}></label>`;
   }}
   let rows=CONFIG_PTO.filter(c=>(!bloque||c.grupo===bloque)&&(!resp||c.responsable===resp));
   if(filtro==="datos") rows=rows.filter(c=>{const v=ptoVigente(c.key,ultimo);return (v&&v.pto)||Object.values(c.serie).some(s=>s[3]!==0);});
@@ -1323,8 +1345,8 @@ window.togglePtoDetalle=togglePtoDetalle;
   const body=rows.map(c=>{
     const ov=OVERRIDES[c.key],base=ov.base;
     const vigUlt=ptoVigente(c.key,ultimo);
-    const ptoShow=vigUlt?pesosEnMes(vigUlt.pto,vigUlt.desde,fechaBaseYM)*fPtoMes(fechaBaseYM):0;
-    const ptoMesFn=m=>{const v=ptoEnMes(c.key,m,fPtoMes(m));return base==="anual"?v/12:v;};
+    const ptoShow=vigUlt?ptoVigenciaEnMoneda(vigUlt,cur,fechaBaseYM):0;
+    const ptoMesFn=m=>{const v=ptoEnMesMoneda(c.key,m,cur);return base==="anual"?v/12:v;};
     const ptoMesUlt=ptoMesFn(ultimo);
     const reals=meses.map(m=>{const s=c.serie[m];return s?s[cur]:0;}); reals.forEach((v,k)=>colTot[k]+=v);
     const realUlt=(c.serie[ultimo]?c.serie[ultimo][cur]:0), desvUlt=realUlt-ptoMesUlt;
@@ -1335,7 +1357,7 @@ window.togglePtoDetalle=togglePtoDetalle;
     let acumCell;
     if(base==="anual"){
       const realAcum=mesesAcum.reduce((s,m)=>s+(c.serie[m]?c.serie[m][cur]:0),0);
-      const ptoAnualCur=vigUlt?vigUlt.pto*fPtoMes(vigUlt.desde):0;
+      const ptoAnualCur=vigUlt?ptoVigenciaEnMoneda(vigUlt,cur,vigUlt.desde):0;
       const pctA=ptoAnualCur?realAcum/ptoAnualCur:null;
       acumCell=pctA==null?`<td class="info fzr mut">–</td>`:`<td class="info fzr ${realAcum>ptoAnualCur?"over":"under"}">${(pctA*100).toFixed(0)}%</td>`;
     }else{
@@ -1378,7 +1400,8 @@ window.togglePtoDetalle=togglePtoDetalle;
      <div class="kpi"><div class="k-lbl">Desvío período</div><div class="k-val" style="color:${tRealPer>tPtoPer?"var(--cost)":"var(--income)"}">${curLbl} ${fmtM(tRealPer-tPtoPer)}</div></div>
      <div class="kpi"><div class="k-lbl">Líneas excedidas</div><div class="k-val">${over}</div></div>
      <div class="kpi"><div class="k-lbl">Acum. mensuales desde ${esc(mesLabel(fechaBaseYM))}</div><div class="k-val" style="color:${tAcumMensual>0?"var(--cost)":"var(--income)"}">${curLbl} ${fmtM(tAcumMensual)}</div></div>`;
-  document.getElementById("pFoot").innerHTML=`<div style="margin-bottom:6px">${respLegend}</div><b>Total real</b>: suma de real del período seleccionado (Desde/Hasta). <b>Desvío últ. mes</b>: real del último mes vs Pto de ese mes. <b>Acum. desde ${esc(mesLabel(fechaBaseYM))}</b>: para cuentas mensuales, desvío acumulado mes a mes (Pto ajustado por inflación de cada mes, no acumulativo respecto de "hoy") desde el inicio de ejercicio hasta el mes "Hasta" elegido arriba (no depende del filtro "Desde"); para anuales, real acumulado del ejercicio sobre Pto anual vigente. 🕘 = historial de vigencias del Pto (clic para ver/agregar un cambio "desde tal mes").`;
+  const notaMonedaPto=cur===1||cur===2?`<div style="margin-bottom:6px"><b>Pto en ${cur===1?"USD Oficial":"USD Billete"}</b>: se valoriza una sola vez al tipo de cambio del último día del mes en que arranca su vigencia, y de ahí en adelante es siempre el mismo valor en USD (no se ajusta por inflación); se compara con el gasto de cada mes en esa moneda.</div>`:"";
+  document.getElementById("pFoot").innerHTML=notaMonedaPto+`<div style="margin-bottom:6px">${respLegend}</div><b>Total real</b>: suma de real del período seleccionado (Desde/Hasta). <b>Desvío últ. mes</b>: real del último mes vs Pto de ese mes. <b>Acum. desde ${esc(mesLabel(fechaBaseYM))}</b>: para cuentas mensuales, desvío acumulado mes a mes (Pto ajustado por inflación de cada mes, no acumulativo respecto de "hoy") desde el inicio de ejercicio hasta el mes "Hasta" elegido arriba (no depende del filtro "Desde"); para anuales, real acumulado del ejercicio sobre Pto anual vigente. 🕘 = historial de vigencias del Pto (clic para ver/agregar un cambio "desde tal mes").`;
 }
 /* ===== Columnas redimensionables (tabla .grid) — mismo patrón que 4housing-compras, pero solo con
    localStorage (esta app no tiene todavía una tabla de preferencias por usuario en Supabase). Tirá
