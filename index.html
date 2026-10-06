@@ -976,10 +976,33 @@ function debugGruposPorConcepto(cuenta){
   });
   return out;
 }
+/* Desplegable "Cuenta contable" de Apertura: solo las cuentas con movimientos de Estructura / Estructura NQN (y
+   Inversion, en los bienes de uso) en los datos cargados -- las demas se ocultan (a pedido de Micaela,
+   2026-10-06; con el crudo abr-25..ago-26 eran 7: Gastos de Transporte, Materiales, Gastos generales, Impuesto
+   Pais, Gastos Mano de Obra, ART y Patentes). Se rearma solo cuando cambia la lista, asi que una cuenta oculta
+   reaparece sola apenas un crudo trae movimientos suyos. "⚠ Estructura sin detalle" se muestra siempre (es el
+   chequeo de cobertura). Si todavia no hay datos cargados, se muestran todas, para no dejar el desplegable vacio. */
+function poblarCuentasApertura(){
+  const sel=document.getElementById("paCuenta"); if(!sel) return;
+  const conDatos=APERTURA_CUENTAS.filter(c=>detalleAperturaCuenta(c).length>0);
+  const lista=conDatos.length?conDatos:APERTURA_CUENTAS.slice();
+  const firma=lista.join("\u241F");
+  if(sel.dataset&&sel.dataset.firma===firma) return;
+  const actual=sel.value;
+  sel.innerHTML="";
+  lista.forEach(c=>sel.add(new Option(c,c)));
+  sel.add(new Option(APERTURA_COBERTURA_CUENTA,APERTURA_COBERTURA_CUENTA));
+  sel.value=(lista.includes(actual)||actual===APERTURA_COBERTURA_CUENTA)?actual:lista[0];
+  if(sel.dataset) sel.dataset.firma=firma;
+  if(actual&&actual!==sel.value){ // la cuenta que estaba elegida quedo oculta: se pasa a la primera
+    const cr=document.getElementById("paCuentaReal"), ax=document.getElementById("paAux");
+    if(cr) cr.value=""; if(ax) ax.value="";
+    poblarGrupoApertura(); poblarMesesApertura();
+  }
+}
 function initPtoApertura(){
   const sel=document.getElementById("paCuenta");
-  sel.innerHTML="";APERTURA_CUENTAS.forEach(c=>sel.add(new Option(c,c)));
-  sel.add(new Option(APERTURA_COBERTURA_CUENTA,APERTURA_COBERTURA_CUENTA));
+  poblarCuentasApertura();
   sel.addEventListener("change",()=>{document.getElementById("paCuentaReal").value="";document.getElementById("paAux").value="";poblarGrupoApertura();poblarMesesApertura();renderPtoApertura();});
   document.getElementById("paGrupo").addEventListener("change",()=>{poblarMesesApertura();renderPtoApertura();});
   document.getElementById("paDesde").addEventListener("change",renderPtoApertura);
@@ -1090,6 +1113,7 @@ function poblarFiltrosAperturaDetalle(cuenta){
 }
 function renderPtoApertura(){
   const sel=document.getElementById("paCuenta"); if(!sel) return;
+  poblarCuentasApertura();
   const cuenta=sel.value;
   poblarFiltrosAperturaDetalle(cuenta);
   const grupoSel=document.getElementById("paGrupo").value;
@@ -2528,14 +2552,19 @@ function mergeAperturaIntoData(resCuentas){
   // actualizarla, ni cargarla en un lugar aparte. Simplemente reemplaza, por cuenta, los meses que
   // trae CADA archivo que se sube (historico o actual); los meses que ese archivo no toca quedan
   // como estaban (por eso subir el archivo de un mes no borra el detalle de los demas).
+  // 2026-10-06: "los meses que trae el archivo" son TODOS los que cubre (resCuentas.meses), no solo los meses
+  // en que esa cuenta tiene asientos. Antes, si en el archivo nuevo una cuenta ya no tenia ningun asiento en un
+  // mes (se reclasifico o se borro en Tango), el detalle viejo de ese mes se quedaba para siempre; eso ademas
+  // mantenia visibles en el desplegable cuentas sin movimientos reales (ver poblarCuentasApertura).
+  const mesesArchivoApertura=new Set(resCuentas.meses);
   APERTURA_CUENTAS.forEach(cuenta=>{
     const nuevo=resCuentas.detalle[cuenta]||[];
-    const mesesNuevos=new Set(nuevo.map(t=>t.mes));
+    const mesesNuevos=mesesArchivoApertura;
     const viejo=(APERTURA_DETALLE[cuenta]||[]).filter(t=>!mesesNuevos.has(t.mes));
     APERTURA_DETALLE[cuenta]=[...viejo,...nuevo];
     // Mismo criterio de reemplazo por mes, para el auxiliar secundario.
     const nuevoAux2=resCuentas.aux2[cuenta]||{};
-    const mesesNuevosAux2=new Set(Object.values(nuevoAux2).map(v=>v.mes));
+    const mesesNuevosAux2=mesesArchivoApertura;
     const viejoAux2=APERTURA_AUX2_DETALLE[cuenta]||{};
     const viejoFiltrado={};
     Object.keys(viejoAux2).forEach(k=>{ if(!mesesNuevosAux2.has(viejoAux2[k].mes)) viejoFiltrado[k]=viejoAux2[k]; });
