@@ -129,6 +129,16 @@ table.grid tr.result td.fzr{background:#EDEBE1;}
    en JS (actualizarStickyPto/actualizarStickyPtoDerecha) segun el ancho real de cada columna,
    porque se pueden redimensionar a mano y Base/Pto Pesos/Pto-mes se pueden ocultar. Ver esas funciones. */
 .fz1{min-width:150px;max-width:220px;}
+/* Apertura de Estructura (a pedido de Micaela, 2026-10-06): las etiquetas de la primera columna hacen salto
+   de linea en vez de salirse de su caja -- antes un nombre largo ("MANTENIMIENTO ABC X 5 KG", "Gastos segun
+   informe de Estructura", "Diferencia vs. Apertura (Estructura)") se escribia ENCIMA de los numeros del primer
+   mes y no se leian. Con ancho fijo el texto completo queda visible en dos o tres lineas. */
+#paTabla td.fz1,#paPtoTabla td.fz1,#paInfTabla td.fz1{white-space:normal;overflow-wrap:anywhere;line-height:1.25;}
+/* Lo mismo en Presupuesto·Estructura (cuentas largas como "Impuesto sobre Creditos Bancarios Ley 25413") y en
+   Proyectos·CMV (nombres de proyecto como "PL0076 2 LA COMARCA RESTAURANTE"): antes se cortaban con "..." y no
+   se podia leer el nombre completo salvo pasando el mouse. */
+#pTabla td.fz1{white-space:normal;overflow-wrap:anywhere;line-height:1.25;}
+#cmvTabla tbody td.fzc{white-space:normal;overflow-wrap:anywhere;line-height:1.25;text-overflow:clip;}
 .fz2{min-width:44px;max-width:70px;text-align:center!important;}
 .fz3{min-width:52px;}
 .fz4{min-width:92px;}
