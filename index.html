@@ -900,7 +900,14 @@ function detalleAperturaCuenta(cuenta){
       .filter(cta=>!APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cta)])
       .flatMap(cta=>APERTURA_ESTRUCTURA_TOTAL[cta]);
   }
-  const todo=APERTURA_DETALLE[cuenta]||[];
+  // 2026-10-06 (a pedido de Micaela): Apertura de Estructura analiza SOLO lo imputado a "K) ESTRUCTURA" y
+  // "K) ESTRUCTURA NQN" (Aux 02), en todas las cuentas, incluida Cta Part Socios -- nada de A) CMV VENTA,
+  // P) PROVEEDORES, M) INVERSIONES, O) IMPUESTOS, N) SUELDOS, etc. (eso va a un informe aparte que arma ella
+  // despues). Se filtra al LEER, no al cargar: APERTURA_DETALLE y APERTURA_AUX2_DETALLE conservan todos los
+  // Grupos, porque aux2ItemsParaTx necesita saber cuando un comprobante mezcla Estructura con Inversion para
+  // partir los bienes por importe. APERTURA_GRUPOS_PERMITIR/EXCLUIR siguen actuando adentro de esto.
+  const gruposEstructura=["K) ESTRUCTURA","K) ESTRUCTURA NQN"].map(normApertura);
+  const todo=(APERTURA_DETALLE[cuenta]||[]).filter(t=>gruposEstructura.includes(normApertura(t.grupo)));
   const permitir=APERTURA_GRUPOS_PERMITIR[cuenta];
   if(permitir&&permitir.length) return todo.filter(t=>permitir.some(g=>normApertura(g)===normApertura(t.grupo)));
   const excl=APERTURA_GRUPOS_EXCLUIR[cuenta];
