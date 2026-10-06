@@ -2272,12 +2272,18 @@ const APERTURA_CUENTAS_MAP={
   // "Multas" se agregó acá a pedido de Micaela ("multas tampoco, debieran ir con Rodados") en vez de
   // ir con la tanda de cuentas simples -- si trae Aux 08 (vehículo puntual) se va a abrir igual que
   // el resto; si no, cae en "(sin Aux 08)" como cualquier cuenta de Rodados sin ese dato.
-  "Rodados":["Mantenimiento Rodados","Patente Automotor RODADOS","Seguro Automotor RODADOS","Rodados (V. Orig)","Rodados (No Usar)","Rodados (AJ RT 6)","Amort Acum rodados (AJ RT 6)","Amort Acum rodados (V. Orig)","Multas"],
+  // 2026-10-06, confirmado por Micaela: las cuentas de Grua (V. Orig)/(AJ RT 6)/(No Usar) van con Rodados --
+  // "el auxiliar es lo que define como quiero verlo" (las de Grua con costo traen Aux 08 - RODADOS).
+  "Rodados":["Mantenimiento Rodados","Patente Automotor RODADOS","Seguro Automotor RODADOS","Rodados (V. Orig)","Rodados (No Usar)","Rodados (AJ RT 6)","Amort Acum rodados (AJ RT 6)","Amort Acum rodados (V. Orig)","Multas","Grua (V. Orig)","Grua (AJ RT 6)","Grua (No Usar)"],
   "Herramientas":["Mantenimiento Herramientas","Herramientas (V. Orig)","Herramientas (No Usar)","Herramientas (AJ RT 6)","Amort Acum Herramientas (AJ RT 6)","Amort Acum Herramientas (V. Orig)"],
   // Confirmado con Micaela (captura de su filtro "Desc. cuenta"): a diferencia de Rodados/Herramientas/
   // Muebles y Útiles, acá NO hay una cuenta de costo "Bienes de Uso (V. Orig)/(No Usar)" -- el universo
   // completo son estas 4 cuentas (Mantenimiento, Seguro, y el Amort Acum de "Mejoras s/ Inm 3ros").
-  "Mantenimiento Bs de Uso":["Mantenimiento Bs de Uso","Seguro Bienes de Uso","Amort Acum Mejoras s/ Inm 3ros (AJ RT 6)","Amort Acum Mejoras s/ Inm 3ros (V. Orig)"],
+  // 2026-10-06, confirmado por Micaela (el universo de arriba quedo corto): "Maquinarias (V. Orig)" y
+  // "Mejoras sobre Inmueb de 3ros" (nueva y "(No Usar)") van tambien aca -- su Aux es 05 - MANTENIMIENTO BS DE
+  // USO (en el crudo abr-25..ago-26 suman Inversion 14,75 M y 2,92 M, antes fuera de toda Apertura). Quedan
+  // sin asociar, a proposito, las Amort Acum de Muebles y de Grua (solo postean en Q) AJUSTES CTAS, no se ven).
+  "Mantenimiento Bs de Uso":["Mantenimiento Bs de Uso","Seguro Bienes de Uso","Amort Acum Mejoras s/ Inm 3ros (AJ RT 6)","Amort Acum Mejoras s/ Inm 3ros (V. Orig)","Maquinarias (V. Orig)","Mejoras sobre Inmueb de 3ros (V. Orig)","Mejoras sobre Inmueb de 3ros (No Usar)"],
   "Ajustes Cuentas Corrientes":["Ajustes Cuentas Corrientes"],
   // Tanda de 26 cuentas simples confirmadas por Micaela: "son todas igual" -- mismo esquema que
   // Alquileres/Energía (Compras -> Leyenda/proveedor, resto -> Origen/módulo), sin apertura por Grupo
@@ -2394,6 +2400,7 @@ function parseRawLedgerCuentas(rows){
   // Grupo, y es la UNICA forma de lograrlo, esos bienes son de ese Grupo (ver aux2ItemsParaTx). Si no
   // hay forma segura de partirlo, se cae en "(sin Aux 0N)" -- no se arriesga una atribucion incorrecta.
   const aux2Raw={}; const gruposMontosPorClave={};
+  const tiposAuxBien=new Set(Object.values(APERTURA_TIPO_AUX2)); const sinAsociarAux={}; // cuenta real -> tipo de aux de bien, si no esta en ninguna Apertura
   for(let i=1;i<rows.length;i++){
     const r=rows[i]; if(!r||r.length<10) continue;
     const origen=S(r[0]), tipoAux=S(r[1]), cuenta=S(r[9]);
@@ -2402,6 +2409,7 @@ function parseRawLedgerCuentas(rows){
     // auxiliar" (Generico/No aplica/el bien) no es un codigo de Aux 02 -- se guarda aparte, para
     // cruzarlo despues con su fila "02 - EERR" gemela via claveAux2().
     if(tipoAux!=="02 - EERR"){
+      if(tiposAuxBien.has(tipoAux)&&!APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cuenta)]) sinAsociarAux[cuenta]=tipoAux;
       const cuentaApertura2=APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cuenta)];
       const tipoEsperado2=cuentaApertura2 && APERTURA_TIPO_AUX2[cuentaApertura2];
       if(cuentaApertura2 && (!tipoEsperado2 || tipoAux===tipoEsperado2)){
@@ -2451,7 +2459,16 @@ function parseRawLedgerCuentas(rows){
   });
   const out={};
   Object.keys(cagg).forEach(k=>{ const serie={}; Object.keys(cagg[k]).sort().forEach(y=>serie[y]=cagg[k][y].map(v=>Math.round(v*1e4)/1e4)); out[k]=serie; });
-  return {cuentas:out, meses:[...mesesSet].sort(), detalle, aux2}; // cuentas: "cuenta\u241Fgrupo" -> {mes:[ars,usdOfic,usdBill,axi]}
+  // Control de cobertura (pedido de Micaela: "el auxiliar es lo que define como quiero verlo"): cuentas con un
+  // auxiliar de bien (05 a 08) que NO estan asociadas a ninguna Apertura y tienen algo imputado a Estructura,
+  // Estructura NQN o Inversion -- se avisa en el mensaje de la carga, no se asignan solas.
+  const sinAsociar=[];
+  Object.keys(sinAsociarAux).sort().forEach(cuenta=>{
+    const imp={};
+    ["K) ESTRUCTURA","K) ESTRUCTURA NQN","M) INVERSIONES"].forEach(g=>{ const ser=cagg[cuenta+"\u241F"+g]; if(ser){ const t=Object.values(ser).reduce((a,v)=>a+v[0],0); if(Math.abs(t)>0.5) imp[g]=Math.round(t); } });
+    if(Object.keys(imp).length) sinAsociar.push({cuenta,aux:sinAsociarAux[cuenta],imp});
+  });
+  return {cuentas:out, meses:[...mesesSet].sort(), detalle, aux2, sinAsociar}; // cuentas: "cuenta\u241Fgrupo" -> {mes:[ars,usdOfic,usdBill,axi]}
 }
 const APERTURA_DETALLE={}; // cuenta -> [ {mes,fecha,origen,tipoComp,razonSocial,comprobante,ars}, ... ]
 // cuenta -> { claveAux2(cuenta,comprobante,fecha) -> {tipoAux,codigo,desc,leyenda,mes} }. Detalle del
@@ -4088,6 +4105,7 @@ async function onCargarInformeCrudo(file){
     if(nPend) m2+=` ⚠ ${nPend} filas sin cotizacion completa (fechas sin historico ni dato en vivo) — no se inventaron valores, quedaron en 0 para esas filas.`;
     if(nIgnor) m2+=` ${nIgnor} filas con grupo no reconocido, ignoradas: ${Object.keys(res.gruposIgnorados).join(", ")}.`;
     m2+=" Presupuesto·Estructura actualizado: "+nCuentas+" cuentas.";
+    if(resCuentas.sinAsociar&&resCuentas.sinAsociar.length) m2+=` ⚠ ${resCuentas.sinAsociar.length} cuenta(s) con auxiliar de bien sin asociar a ninguna Apertura (y con importes en Estructura/Inversión, que no se ven): ${resCuentas.sinAsociar.map(x=>x.cuenta+" ["+x.aux.slice(0,2)+"]").join(", ")}.`;
     if(CUENTAS_NUEVAS_PTO.length) m2+=` ➕ ${CUENTAS_NUEVAS_PTO.length} cuenta(s) nueva(s) agregada(s) a Presupuesto·Estructura, sin responsable y con Pto 0: ${CUENTAS_NUEVAS_PTO.join(", ")}.`;
     m2+=" Proyectos/CMV actualizado: "+resC.aperturas.length+" aperturas (proyectos + buckets compartidos).";
     if(resC.avisos.length) m2+=` ⚠ ${resC.avisos.length} proyectos de Ventas/CMV (según Compras) con asientos mal clasificados en el 02-EERR: revisar en la pestaña Proyectos·CMV.`;
