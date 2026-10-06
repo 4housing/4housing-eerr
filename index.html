@@ -297,6 +297,8 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
       <div class="ctl"><label for="paCuenta">Cuenta contable</label><select id="paCuenta"></select></div>
       <div class="ctl"><label for="paMoneda">Moneda</label><select id="paMoneda"><option value="0" selected>Pesos ($)</option><option value="1">USD Oficial</option><option value="2">USD Billete</option><option value="3">Ajustado x inflación (AXI)</option></select></div>
       <div class="ctl"><label for="paGrupo">Grupo</label><select id="paGrupo"><option value="">Todos</option></select></div>
+      <div class="ctl"><label for="paCuentaReal">Cuenta contable real</label><select id="paCuentaReal"><option value="">Todas</option></select></div>
+      <div class="ctl" id="paAuxWrap" style="display:none"><label for="paAux">Auxiliar</label><select id="paAux"><option value="">Todos</option></select></div>
       <div class="ctl"><label for="paDesde">Desde</label><select id="paDesde"></select></div>
       <div class="ctl"><label for="paHasta">Hasta</label><select id="paHasta"></select></div>
       <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="ultimoAnioApertura()">Último año</button></div>
@@ -978,11 +980,13 @@ function initPtoApertura(){
   const sel=document.getElementById("paCuenta");
   sel.innerHTML="";APERTURA_CUENTAS.forEach(c=>sel.add(new Option(c,c)));
   sel.add(new Option(APERTURA_COBERTURA_CUENTA,APERTURA_COBERTURA_CUENTA));
-  sel.addEventListener("change",()=>{poblarGrupoApertura();poblarMesesApertura();renderPtoApertura();});
+  sel.addEventListener("change",()=>{document.getElementById("paCuentaReal").value="";document.getElementById("paAux").value="";poblarGrupoApertura();poblarMesesApertura();renderPtoApertura();});
   document.getElementById("paGrupo").addEventListener("change",()=>{poblarMesesApertura();renderPtoApertura();});
   document.getElementById("paDesde").addEventListener("change",renderPtoApertura);
   document.getElementById("paHasta").addEventListener("change",renderPtoApertura);
   document.getElementById("paMoneda").addEventListener("change",renderPtoApertura);
+  document.getElementById("paCuentaReal").addEventListener("change",renderPtoApertura);
+  document.getElementById("paAux").addEventListener("change",renderPtoApertura);
   poblarGrupoApertura();
   poblarMesesApertura();
 }
@@ -1052,9 +1056,42 @@ function ptoDesdeMoneda(valor,cur,desdeYM,ym){
 }
 function ptoEnMesMoneda(key,ym,cur){ return ptoVigenciaEnMoneda(ptoVigente(key,ym),cur,ym); }
 function aperturaPtoEnMesMoneda(cuenta,concepto,ym,cur){ return ptoVigenciaEnMoneda(aperturaPtoVigente(cuenta,concepto,ym),cur,ym); }
+/* Filtros "Cuenta contable real" y "Auxiliar" de Apertura (pedido de Micaela, para controlar, por ejemplo, si
+   la patente o el seguro automotor se registran bien en cada rodado). Las opciones salen de los datos
+   cargados de la cuenta (todos los meses, sin acotar por Grupo ni por otro filtro) y se rearman en cada
+   render solo si cambiaron, conservando lo elegido mientras siga existiendo. "Auxiliar" aplica solo a las 4
+   cuentas que abren por bien (Muebles y Utiles, Rodados, Herramientas, Mantenimiento Bs de Uso). */
+function poblarFiltrosAperturaDetalle(cuenta){
+  const esBienes=!!APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta];
+  const todas=detalleAperturaCuenta(cuenta);
+  const reales=[...new Set(todas.map(t=>t.cuenta).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
+  const rellenar=(id,etiquetaTodos,valores)=>{
+    const el=document.getElementById(id); if(!el) return;
+    const firma=valores.join("\u241F");
+    if(el.dataset&&el.dataset.firma===firma) return;
+    const actual=el.value;
+    el.innerHTML=""; el.add(new Option(etiquetaTodos,""));
+    valores.forEach(v=>el.add(new Option(v,v)));
+    el.value=valores.includes(actual)?actual:"";
+    if(el.dataset) el.dataset.firma=firma;
+  };
+  rellenar("paCuentaReal","Todas",reales);
+  const wrap=document.getElementById("paAuxWrap"); if(wrap) wrap.style.display=esBienes?"":"none";
+  if(esBienes){
+    const items=itemizarTxsPorAux(cuenta,todas);
+    const nombres=[...new Set(items.map(t=>t.aux))];
+    const num=(APERTURA_TIPO_AUX2[cuenta]||"").match(/^(\d+)/); const sin=num?`(sin Aux ${num[1]})`:"(sin Aux)";
+    const ord=nombres.filter(n=>n!==sin).sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
+    if(nombres.includes(sin)) ord.push(sin);
+    rellenar("paAux","Todos",ord);
+  }else{
+    const el=document.getElementById("paAux"); if(el){ el.value=""; if(el.dataset) el.dataset.firma=""; }
+  }
+}
 function renderPtoApertura(){
   const sel=document.getElementById("paCuenta"); if(!sel) return;
   const cuenta=sel.value;
+  poblarFiltrosAperturaDetalle(cuenta);
   const grupoSel=document.getElementById("paGrupo").value;
   const todasTCuenta=detalleAperturaCuenta(cuenta);
   const todasT=grupoSel?todasTCuenta.filter(t=>normApertura(valorFiltroApertura(cuenta,t))===normApertura(grupoSel)):todasTCuenta;
@@ -1068,7 +1105,15 @@ function renderPtoApertura(){
   const mesesSel=meses.slice(a,b+1);
   const mesesSelSet=new Set(mesesSel);
   const cur=+((document.getElementById("paMoneda")||{}).value||0);
-  const txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
+  let txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
+  // Cuentas que abren por bien: cada transaccion se separa por auxiliar ANTES de totalizar, asi los filtros de
+  // abajo (y todos los totales) cuentan lo mismo. Filtros "Cuenta contable real" y "Auxiliar" (ver arriba).
+  const esBienesUso=!!APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta];
+  if(esBienesUso) txs=itemizarTxsPorAux(cuenta,txs);
+  const cuentaRealSel=(document.getElementById("paCuentaReal")||{}).value||"";
+  const auxSel=esBienesUso?((document.getElementById("paAux")||{}).value||""):"";
+  if(cuentaRealSel) txs=txs.filter(t=>t.cuenta===cuentaRealSel);
+  if(auxSel) txs=txs.filter(t=>t.aux===auxSel);
   const curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
   // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
   // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
@@ -1109,7 +1154,7 @@ function renderPtoApertura(){
   const rowsHtml=(cfgResumen&&porCuentaReal
     ? filasAperturaPorCuentaReal(cuenta,cfgResumen,txs,clasFn,mesesSel)
     : cfgResumen&&porGrupoYCuentaReal
-    ? filasAperturaPorGrupoYCuentaReal(cuenta,cfgResumen,txs,clasFn,mesesSel)
+    ? filasAperturaPorAuxYGrupo(cuenta,cfgResumen,txs,clasFn,mesesSel)
     : filasAperturaPorRamas(cuenta,cfgResumen,topProveedores,txs,clasFn,conceptos,mesesSel)) || filaVacia;
   // Pto de la cuenta mes a mes, para comparar contra el real de esta apertura. Si hay Pto cargado
   // por concepto (APERTURA_PTO, ver mas abajo) se usa la suma de esos -- asi cada proveedor puede
@@ -1185,7 +1230,7 @@ function renderPtoApertura(){
     :`Desglose transacción por transacción del "02-EERR" para "${esc(cuenta)}"${grupoSel?" ("+esc(grupoSel)+")":""}, agrupado por concepto y mes según la regla que definimos para esta cuenta.`;
   document.getElementById("paFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">${encabezadoNota}${notaResumen} La fila "Pto" muestra el presupuesto mensual (suma de los Pto por concepto de más abajo, si ya están cargados; vacío en los meses sin ninguna vigencia todavía) y la fila "Desvío" la diferencia Pto − real de cada mes — en <span class="under">verde</span> cuando el real vino por debajo del Pto, en <span class="over">rojo</span> cuando lo superó; la columna Total de ambas es la suma de los meses que se ven arriba (Desde/Hasta).<br><span class="mut" style="font-size:11px">${esc(etiquetaFiltroApertura(cuenta))} real por concepto (diagnóstico, todos los meses cargados, no solo los de arriba): ${debugTxt||"–"}</span><br><span class="mut" style="font-size:11px">${esc(debugFiltro)}</span></div></details>`;
   renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur);
-  renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs);
+  renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs,cuentaRealSel,auxSel);
   sincronizarAnchoPtoConcepto();
 }
 // Segunda tabla: Pto de CADA concepto mes a mes (no el real) -- muestra como se compone el Pto
@@ -1235,11 +1280,12 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur){
    dos ramas y en las 4 monedas. Misma moneda que el resto de la pantalla (serie[cur]). No aplica a "⚠
    Estructura sin detalle" (ya es justamente lo que falta cubrir). */
 const GRUPOS_INFORME_ESTRUCTURA=[{grupo:"K) ESTRUCTURA",label:"Estructura"},{grupo:"K) ESTRUCTURA NQN",label:"Estructura NQN"}];
-function renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs){
+function renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs,cuentaRealSel,auxSel){
   const wrap=document.getElementById("paInfWrap"), tabla=document.getElementById("paInfTabla"), foot=document.getElementById("paInfFoot");
   if(!wrap||!tabla) return;
-  if(cuenta===APERTURA_COBERTURA_CUENTA||!mesesSel.length){ wrap.style.display="none"; foot.innerHTML=""; return; }
-  const reales=new Set((APERTURA_CUENTAS_MAP[cuenta]||[]).map(normApertura));
+  // El informe de Presupuesto·Estructura no tiene auxiliar: con un Auxiliar elegido no hay con que comparar.
+  if(cuenta===APERTURA_COBERTURA_CUENTA||!mesesSel.length||auxSel){ wrap.style.display="none"; foot.innerHTML=""; return; }
+  const reales=new Set((cuentaRealSel?[cuentaRealSel]:(APERTURA_CUENTAS_MAP[cuenta]||[])).map(normApertura));
   const filtroFn=APERTURA_FILTRO_FN[cuenta]; // cuentas con eje propio (Cta Part Socios: por socio)
   const cfgs=CONFIG_PTO.filter(c=>reales.has(normApertura(c.cuenta))&&(!filtroFn||!grupoSel||normApertura(filtroFn({cuenta:c.cuenta}))===normApertura(grupoSel)));
   const tol=(cur===1||cur===2)?0.01:0.5;
@@ -2596,7 +2642,7 @@ function moverConceptoApertura(cuenta,concepto,dir,vecino){
 }
 window.moverConceptoApertura=moverConceptoApertura;
 // Mismo mecanismo que APERTURA_ORDEN, pero para el nivel "Aux 0N" (Nivel 2) de
-// filasAperturaPorGrupoYCuentaReal -- a pedido de Micaela, en Muebles y Útiles/Rodados/Herramientas/
+// filasAperturaPorAuxYGrupo -- a pedido de Micaela, en Muebles y Útiles/Rodados/Herramientas/
 // Mantenimiento Bs de Uso quiere poder subir/bajar el orden de los auxiliares con flechas, arrancando
 // alfabético por default, y "(sin Aux 0N)" siempre al final (no participa del orden manual: nunca se
 // guarda en este array, se agrega aparte al final en resolverOrdenAux0N).
@@ -2724,7 +2770,7 @@ const CLASIF_APERTURA_FN={
   "Movilidad Combustible": t=>t.origen==="Compras"?(t.razonSocial||"(sin proveedor)"):(t.origen||"(sin módulo)"),
   // Misma regla que Energía/Food & Bev (Compras -> proveedor, resto -> módulo). El Aux 02
   // (Estructura/Inversión) y el Aux 06 (Genérico/No aplica/el bien) son ejes de apertura APARTE, no
-  // parte de este Concepto -- ver filasAperturaPorGrupoYCuentaReal, que abre Grupo -> Aux 06 ->
+  // parte de este Concepto -- ver filasAperturaPorAuxYGrupo, que abre Aux 06 -> Grupo ->
   // Cuenta contable -> este Concepto (Proveedor si es Compras, si no el módulo de origen).
   "Muebles y Útiles": t=>t.origen==="Compras"?(t.razonSocial||"(sin proveedor)"):(t.origen||"(sin módulo)"),
   // Mismas 3 cuentas, misma regla (Compras -> proveedor, resto -> módulo) y mismo esquema de apertura
@@ -2787,7 +2833,7 @@ const APERTURA_RESUMEN_GRUPO={
   ],
   // A pedido de Micaela: igual que su tabla dinámica -- Estructura/Inversión primero (con
   // subtotales), y adentro de cada una, por cuenta real (ver APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL
-  // + filasAperturaPorGrupoYCuentaReal, que abre en ese orden: al revés que Cta Part Socios).
+  // + filasAperturaPorAuxYGrupo, que abre Aux -> Grupo -> cuenta real: al revés que Cta Part Socios).
   // IMPORTANTE (corregido a pedido de Micaela, se le había pasado por alto): "Estructura" y
   // "Estructura NQN" son dos ramas SIEMPRE separadas, nunca un solo bucket combinado -- por más que
   // hoy Muebles y Útiles no tenga movimientos en NQN, se deja igual la rama declarada (por si aparece
@@ -2845,7 +2891,7 @@ const APERTURA_RESUMEN_POR_CUENTA_REAL={"Cta Part Socios":true};
 // A pedido de Micaela: para "Muebles y Útiles" el orden es al revés que Cta Part Socios -- primero
 // Grupo/Aux 02 (Estructura/Inversión, con subtotal), y adentro de cada uno, por cuenta real
 // (Mantenimiento/No Usar/V. Orig/AJ RT 6), y recién adentro el detalle por proveedor. Ver
-// filasAperturaPorGrupoYCuentaReal.
+// filasAperturaPorAuxYGrupo.
 const APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL={"Muebles y Útiles":true,"Rodados":true,"Herramientas":true,"Mantenimiento Bs de Uso":true};
 // Que buckets estan expandidos (mostrando su detalle) -- en memoria nomas, no hace falta persistirlo:
 // arranca todo colapsado, que es como Micaela pidio verlo por default.
@@ -2966,13 +3012,35 @@ function filasAperturaPorCuentaReal(cuenta,cfg,txs,clasFn,mesesSel){
   }).join("");
   return filas||"";
 }
-// A pedido de Micaela, igual que su tabla dinámica de "Muebles y Útiles": primero Grupo/Aux 02
-// (Estructura/Inversión, con subtotal y flecha), adentro de cada uno por AUX 06 (Genérico/No aplica/
-// el bien puntual -- ver aux2ItemsParaTx), adentro de cada uno por CUENTA CONTABLE real (Mantenimiento/No
-// Usar/V. Orig/AJ RT 6), y recién adentro el detalle (Proveedor si es Compras, si no el módulo de
-// origen -- eso ya lo resuelve "clasFn"). Los tres niveles intermedios subtotalizan y se abren/
-// cierran con flecha, igual que el resto de Apertura de Estructura.
-function filasAperturaPorGrupoYCuentaReal(cuenta,cfgGrupo,txs,clasFn,mesesSel){
+/* Muebles y Utiles, Rodados, Herramientas y Mantenimiento Bs de Uso. 2026-10-06, a pedido de Micaela (antes
+   era Grupo primero y el auxiliar adentro): AUXILIAR primero -- "el auxiliar es lo que define como quiero
+   verlo", o sea el bien puntual (el rodado, el mueble, la herramienta; ver aux2ItemsParaTx) --, adentro el
+   GRUPO (Estructura / Estructura NQN / Inversion), adentro la CUENTA CONTABLE real (Mantenimiento, Patente,
+   Seguro, V. Orig, No Usar...), y recien adentro el detalle: la leyenda (codigo de proveedor) si el origen es
+   Compras, o solo el nombre del modulo (Tesoreria, Contabilidad, ContaParam, ContaOC) -- eso ya lo resuelve
+   "clasFn". Cada nivel subtotaliza y se abre/cierra con flecha. Lo que no tiene auxiliar (ej. las cuentas "No
+   Usar") va en "(sin Aux 0N)", siempre al final. El orden de los auxiliares es alfabetico por default y
+   reordenable a mano (APERTURA_ORDEN_AUX0N, ahora un unico orden por cuenta). Los filtros de arriba (Cuenta
+   contable real, Auxiliar) sirven para controlar, por ejemplo, si la patente o el seguro automotor se
+   registran bien en cada rodado. */
+// Separa cada transaccion por bien: si "t" viene de un comprobante que paga varios bienes a la vez (ej. una
+// patente que cubre 11 vehiculos, agregada en una sola fila "02-EERR"), aux2ItemsParaTx devuelve MAS DE UN item
+// y cada uno se convierte en su propia transaccion (mismo mes/grupo/cuenta/proveedor que "t", pero con SU
+// PROPIO importe -- en la moneda elegida: fx) y con su auxiliar en t.aux. Lo que no tiene auxiliar queda
+// entero en "(sin Aux 0N)". Verificado contra el crudo abr-25..ago-26: la suma por bien da exacto el total
+// de las transacciones en las 4 cuentas.
+function itemizarTxsPorAux(cuenta,txs){
+  const numAux0N=(APERTURA_TIPO_AUX2[cuenta]||"").match(/^(\d+)/);
+  const sinAux0N=numAux0N?`(sin Aux ${numAux0N[1]})`:"(sin Aux)";
+  const out=[];
+  txs.forEach(t=>{
+    const items=aux2ItemsParaTx(cuenta,t);
+    if(items&&items.length) items.forEach(it=>out.push({...t,aux:it.desc||sinAux0N,ars:it.ars*(t.fx!=null?t.fx:1),ars0:it.ars}));
+    else out.push({...t,aux:sinAux0N});
+  });
+  return out;
+}
+function filasAperturaPorAuxYGrupo(cuenta,cfgGrupo,txs,clasFn,mesesSel){
   // Agrupa un array de transacciones por una funcion clave, devolviendo {clave:[...]}.
   const agrupar=(arr,fn)=>{ const out={}; arr.forEach(t=>{ const k=fn(t); (out[k]||(out[k]=[])).push(t); }); return out; };
   const totalDe=arr=>arr.reduce((s,t)=>s+t.ars,0);
@@ -2996,75 +3064,52 @@ function filasAperturaPorGrupoYCuentaReal(cuenta,cfgGrupo,txs,clasFn,mesesSel){
     const fila=`<tr${negrita?" class=\"result\"":""}><td class="fz fz1" style="${identPx?`padding-left:${identPx}px`:""}">${etiqueta}</td>${cells}<td class="fzr${signoCls(total)}" style="text-align:right">${totalCont}</td><td class="fzr mut" style="text-align:right">${arrTxs.length}</td></tr>`;
     return {abierto,fila};
   };
-  // Nivel 1: Grupo/Aux 02 (Estructura/Inversión configurados en cfgGrupo; lo que no matchea ningun
-  // bucket cae en su propia fila, ordenado por importe, igual que en filasAperturaResumenPorGrupo).
-  const porGrupoReal=agrupar(txs,t=>t.grupo||"(sin grupo)");
-  const bucketsGrupo=cfgGrupo.map(b=>({label:b.label,txs:[]}));
-  const extraGrupo={};
-  Object.keys(porGrupoReal).forEach(g=>{
-    const idx=cfgGrupo.findIndex(b=>bucketMatch(b,g));
-    const dest=idx>=0?bucketsGrupo[idx]:(extraGrupo[g]||(extraGrupo[g]={label:g,txs:[]}));
-    dest.txs.push(...porGrupoReal[g]);
-  });
-  // extraGrupo guarda {label,txs} (no un array de transacciones puro), asi que se ordena aparte --
-  // ordenPorImporte asume que el valor de cada clave YA es el array de transacciones (como en los
-  // niveles 2 y 3 de mas abajo), no le pega a esta forma.
-  const extraGrupoOrdenado=Object.values(extraGrupo).sort((a,b)=>totalDe(b.txs)-totalDe(a.txs));
-  const todosGrupo=[...bucketsGrupo.filter(b=>b.txs.length),...extraGrupoOrdenado];
-  return todosGrupo.map(infoGrupo=>{
-    const txsGrupo=infoGrupo.txs;
-    const claveGrupo="GRUPO·"+infoGrupo.label;
-    const {abierto:abiertoGrupo,fila:filaGrupo}=filaResumen(claveGrupo,infoGrupo.label,txsGrupo,0,true);
-    if(!abiertoGrupo) return filaGrupo;
-    // Nivel 2: Aux 0N (Generico/No aplica/el bien puntual) -- el "(sin Aux 0N)" que le corresponde a
-    // esta cuenta (via APERTURA_TIPO_AUX2, ej. "(sin Aux 07)" para Herramientas) para lo que no tiene
-    // fila gemela cargada (ej. todo lo de "Muebles y Utiles (No Usar)"). A pedido de Micaela: orden
-    // alfabético por default, reordenable a mano con flechas (ver APERTURA_ORDEN_AUX0N), y "(sin
-    // Aux 0N)" siempre al final, sin entrar en el orden manual.
-    const numAux0N=(APERTURA_TIPO_AUX2[cuenta]||"").match(/^(\d+)/);
-    const sinAux0N=numAux0N?`(sin Aux ${numAux0N[1]})`:"(sin Aux)";
-    // Si "t" viene de un comprobante que paga varios bienes a la vez (ej. una patente que cubre 11
-    // vehiculos, agregada en una sola fila "02-EERR"), aux2ItemsParaTx devuelve MAS DE UN item -- cada uno
-    // se convierte en su propia transaccion (mismo mes/grupo/cuenta/proveedor que "t", pero con SU
-    // PROPIO importe en vez del agregado), para que cada bien muestre lo que realmente le corresponde
-    // en vez de que uno solo se quede con el total agregado (bug real que encontro Micaela con
-    // "Rodados": TIGUAN no aparecia porque su comprobante compartido con otros vehiculos solo dejaba
-    // ver al ultimo que se procesaba). Cuando no hay items (o el comprobante mezcla mas de un Grupo,
-    // ver el filtro en parseRawLedgerCuentas) "t" se deja entero bajo sinAux0N, como antes.
-    const porAux06={};
-    txsGrupo.forEach(t=>{
-      const items=aux2ItemsParaTx(cuenta,t);
-      if(items&&items.length){
-        items.forEach(it=>{
-          const k=it.desc||sinAux0N;
-          (porAux06[k]||(porAux06[k]=[])).push({...t,ars:it.ars*(t.fx!=null?t.fx:1),ars0:it.ars}); // fx: misma conversion de moneda que la transaccion
-        });
-      }else{
-        (porAux06[sinAux0N]||(porAux06[sinAux0N]=[])).push(t);
-      }
+  const numAux0N=(APERTURA_TIPO_AUX2[cuenta]||"").match(/^(\d+)/);
+  const sinAux0N=numAux0N?`(sin Aux ${numAux0N[1]})`:"(sin Aux)";
+  // Las transacciones ya vienen separadas por bien (itemizarTxsPorAux, con t.aux); por las dudas, si alguna no
+  // trae auxiliar se cuenta como "(sin Aux 0N)".
+  const porAux=agrupar(txs,t=>t.aux||sinAux0N);
+  // Nivel 1: AUXILIAR (el bien). Orden alfabetico por default y reordenable a mano con flechas; "(sin Aux 0N)"
+  // siempre al final, sin entrar en el orden manual. Un solo orden por cuenta (antes era uno por Grupo): si ya
+  // habia uno guardado de "<cuenta>·Estructura" se usa de semilla, asi no se pierde lo que ordenó a mano.
+  const nsAux0N=cuenta+"·AUX";
+  if(!APERTURA_ORDEN_AUX0N[nsAux0N]&&APERTURA_ORDEN_AUX0N[cuenta+"·Estructura"]) APERTURA_ORDEN_AUX0N[nsAux0N]=[...APERTURA_ORDEN_AUX0N[cuenta+"·Estructura"]];
+  const ordenAux=resolverOrdenAux0N(nsAux0N,Object.keys(porAux),sinAux0N);
+  return ordenAux.map((aux,idxAux)=>{
+    const txsAux=porAux[aux];
+    const claveAux="AUX·"+aux;
+    const reordenable=aux!==sinAux0N;
+    const nsEscAux=esc(nsAux0N).replace(/'/g,"\\'"), auxEsc=esc(aux).replace(/'/g,"\\'");
+    const ultimoReordenable=ordenAux.length-(ordenAux.includes(sinAux0N)?2:1);
+    const up=reordenable&&idxAux>0?`<span onclick="moverAux0NApertura('${nsEscAux}','${auxEsc}',-1)" title="Subir" style="cursor:pointer;padding:0 2px">▲</span>`:`<span style="opacity:.2;padding:0 2px">▲</span>`;
+    const down=reordenable&&idxAux<ultimoReordenable?`<span onclick="moverAux0NApertura('${nsEscAux}','${auxEsc}',1)" title="Bajar" style="cursor:pointer;padding:0 2px">▼</span>`:`<span style="opacity:.2;padding:0 2px">▼</span>`;
+    const flechasOrden=reordenable?`${up}${down} `:"";
+    const {abierto:abiertoAux,fila:filaAux}=filaResumen(claveAux,aux,txsAux,0,true,flechasOrden);
+    if(!abiertoAux) return filaAux;
+    // Nivel 2: GRUPO / Aux 02 (Estructura, Estructura NQN, Inversion -- configurados en cfgGrupo, siempre
+    // separados y en ese orden; lo que no matchea ningun bucket cae en su propia fila, por importe).
+    const porGrupoReal=agrupar(txsAux,t=>t.grupo||"(sin grupo)");
+    const bucketsGrupo=cfgGrupo.map(b=>({label:b.label,txs:[]}));
+    const extraGrupo={};
+    Object.keys(porGrupoReal).forEach(g=>{
+      const idx=cfgGrupo.findIndex(b=>bucketMatch(b,g));
+      const dest=idx>=0?bucketsGrupo[idx]:(extraGrupo[g]||(extraGrupo[g]={label:g,txs:[]}));
+      dest.txs.push(...porGrupoReal[g]);
     });
-    // Namespace por Grupo (no solo por cuenta): ver el comentario de APERTURA_ORDEN_AUX0N.
-    const nsAux0N=cuenta+"·"+infoGrupo.label;
-    const ordenAux06=resolverOrdenAux0N(nsAux0N,Object.keys(porAux06),sinAux0N);
-    const filasAux06=ordenAux06.map((aux,idxAux)=>{
-      const txsAux=porAux06[aux];
-      const claveAux=claveGrupo+"·AUX06·"+aux;
-      const reordenable=aux!==sinAux0N;
-      const nsEscAux=esc(nsAux0N).replace(/'/g,"\\'"), auxEsc=esc(aux).replace(/'/g,"\\'");
-      const ultimoReordenable=ordenAux06.length-(ordenAux06.includes(sinAux0N)?2:1);
-      const up=reordenable&&idxAux>0?`<span onclick="moverAux0NApertura('${nsEscAux}','${auxEsc}',-1)" title="Subir" style="cursor:pointer;padding:0 2px">▲</span>`:`<span style="opacity:.2;padding:0 2px">▲</span>`;
-      const down=reordenable&&idxAux<ultimoReordenable?`<span onclick="moverAux0NApertura('${nsEscAux}','${auxEsc}',1)" title="Bajar" style="cursor:pointer;padding:0 2px">▼</span>`:`<span style="opacity:.2;padding:0 2px">▼</span>`;
-      const flechasOrden=reordenable?`${up}${down} `:"";
-      const {abierto:abiertoAux,fila:filaAux}=filaResumen(claveAux,aux,txsAux,22,true,flechasOrden);
-      if(!abiertoAux) return filaAux;
+    const extraGrupoOrdenado=Object.values(extraGrupo).sort((a,b)=>totalDe(b.txs)-totalDe(a.txs));
+    const filasGrupo=[...bucketsGrupo.filter(b=>b.txs.length),...extraGrupoOrdenado].map(infoGrupo=>{
+      const txsGrupo=infoGrupo.txs;
+      const claveGrupo=claveAux+"·GRUPO·"+infoGrupo.label;
+      const {abierto:abiertoGrupo,fila:filaGrupo}=filaResumen(claveGrupo,infoGrupo.label,txsGrupo,22,true);
+      if(!abiertoGrupo) return filaGrupo;
       // Nivel 3: cuenta contable real.
-      const porCuentaReal=agrupar(txsAux,t=>t.cuenta||"(sin cuenta)");
+      const porCuentaReal=agrupar(txsGrupo,t=>t.cuenta||"(sin cuenta)");
       const filasCuentaReal=ordenPorImporte(porCuentaReal).map(cr=>{
         const txsCr=porCuentaReal[cr];
-        const claveCr=claveAux+"·CUENTA·"+cr;
+        const claveCr=claveGrupo+"·CUENTA·"+cr;
         const {abierto:abiertoCr,fila:filaCr}=filaResumen(claveCr,cr,txsCr,44,false);
         if(!abiertoCr) return filaCr;
-        // Nivel 4 (leaf): Proveedor si es Compras, si no el módulo de origen (clasFn).
+        // Nivel 4 (leaf): leyenda (proveedor) si es Compras, si no el modulo de origen (clasFn).
         const gruposCr={};
         txsCr.forEach(t=>{
           const k=clasFn(t)||"Otros";
@@ -3078,9 +3123,9 @@ function filasAperturaPorGrupoYCuentaReal(cuenta,cfgGrupo,txs,clasFn,mesesSel){
         }).join("");
         return filaCr+filasHijos;
       }).join("");
-      return filaAux+filasCuentaReal;
+      return filaGrupo+filasCuentaReal;
     }).join("");
-    return filaGrupo+filasAux06;
+    return filaAux+filasGrupo;
   }).join("")||"";
 }
 /* 2026-10-05 -- Ramas por Grupo (Aux 02) en las cuentas "simples" (a pedido de Micaela: "Estructura y
