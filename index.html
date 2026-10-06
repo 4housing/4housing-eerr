@@ -587,6 +587,22 @@ const FECHA_BASE_DEFAULT_YM="2026-04";
 // por defecto en cualquier pestaña (inicio de ejercicio configurado en Config Pto, o abril-26 si
 // todavia no se configuro nada) -- 0 si ese mes no esta en el array (ej. todavia no hay datos tan
 // atras, o el array esta vacio).
+/* 2026-10-06 (a pedido de Micaela): en TODOS los informes se ven todas las columnas de mes, aunque no haya
+   habido gasto -- con el valor en cero ("–", como el resto de las celdas vacias de la app). Antes cada
+   lista de meses salia de "los meses que tienen algo", asi que un mes sin movimientos desaparecia y las
+   columnas saltaban (ej. Muebles y Utiles: SEP-22, NOV-22, DIC-22, FEB-23...). completarMeses() rellena los
+   meses que faltan entre el primero y el ultimo de la lista (formato "AAAA-MM", ordenada o no). */
+function completarMeses(meses){
+  const s=[...new Set((meses||[]).filter(Boolean))].sort();
+  if(s.length<2) return s;
+  let [y,m]=s[0].split("-").map(Number); const fin=s[s.length-1]; const out=[];
+  for(let i=0;i<1200;i++){
+    const ym=y+"-"+String(m).padStart(2,"0"); out.push(ym);
+    if(ym>=fin) break;
+    m++; if(m>12){ m=1; y++; }
+  }
+  return out;
+}
 function indiceFechaBase(meses){
   const fb=(typeof OVERRIDES!=="undefined"&&OVERRIDES.__cfg__&&OVERRIDES.__cfg__.fechaBase)||FECHA_BASE_DEFAULT_YM;
   const idx=meses.indexOf(fb);
@@ -686,7 +702,7 @@ function iniciales(n){
   const nomFirst=nom.split(/\s+/).filter(Boolean)[0]||"";
   return apeIni+(nomFirst?nomFirst[0].toUpperCase():"");
 }
-function pMonths(){const s=new Set();CONFIG_PTO.forEach(c=>Object.keys(c.serie).forEach(m=>s.add(m)));return[...s].sort();}
+function pMonths(){const s=new Set();CONFIG_PTO.forEach(c=>Object.keys(c.serie).forEach(m=>s.add(m)));return completarMeses([...s]);}
 async function initPto(){
   document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>showView(t.dataset.v)));
   await loadOverrides();
@@ -887,7 +903,9 @@ function detalleAperturaCuenta(cuenta){
 // $0 de real (y su Pto correspondiente), no desaparecer de la vista -- si desapareciera, no se podria
 // ver que el "sobrepaso" de Pto del mes siguiente en realidad compensa el ahorro del mes anterior.
 function mesesApertura(cuenta){
-  return [...new Set(detalleAperturaCuenta(cuenta).map(t=>t.mes))].sort();
+  // Todos los meses cargados (rango del Estado de Resultados) mas los propios de la cuenta, sin saltos:
+  // un mes sin gasto de esta cuenta sigue apareciendo, en cero.
+  return completarMeses([...detalleAperturaCuenta(cuenta).map(t=>t.mes),...(DATA.meses||[])]);
 }
 function poblarMesesApertura(){
   const cuenta=document.getElementById("paCuenta").value;
@@ -1214,8 +1232,8 @@ function renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs){
     const dif=apert.map((v,i)=>v-informe[i]), totD=totA-totI;
     const cI=informe.map(v=>`<td class="mescol info${signoCls(v)}" style="text-align:right">${Math.abs(v)<tol?"–":fmt(v)}</td>`).join("");
     const cD=dif.map(v=>`<td class="mescol info${Math.abs(v)<tol?"":" over"}" style="text-align:right">${Math.abs(v)<tol?"–":fmt(v)}</td>`).join("");
-    filas.push(`<tr><td class="fz fz1 info">Gastos según informe de ${esc(G.label)}</td>${cI}<td class="fzr info${signoCls(totI)}" style="text-align:right"><b>${Math.abs(totI)<tol?"–":fmt(totI)}</b></td><td class="fzr info"></td></tr>`);
-    filas.push(`<tr><td class="fz fz1 info" style="padding-left:22px">Diferencia vs. Apertura (${esc(G.label)})</td>${cD}<td class="fzr info${Math.abs(totD)<tol?"":" over"}" style="text-align:right"><b>${Math.abs(totD)<tol?"–":fmt(totD)}</b></td><td class="fzr info"></td></tr>`);
+    filas.push(`<tr><td class="fz fz1 info" title="Gastos según informe de ${esc(G.label)}" style="white-space:normal;line-height:1.25">Gastos según informe de ${esc(G.label)}</td>${cI}<td class="fzr info${signoCls(totI)}" style="text-align:right"><b>${Math.abs(totI)<tol?"–":fmt(totI)}</b></td><td class="fzr info"></td></tr>`);
+    filas.push(`<tr><td class="fz fz1 info" title="Diferencia vs. Apertura (${esc(G.label)})" style="padding-left:22px;white-space:normal;line-height:1.25">Diferencia vs. Apertura (${esc(G.label)})</td>${cD}<td class="fzr info${Math.abs(totD)<tol?"":" over"}" style="text-align:right"><b>${Math.abs(totD)<tol?"–":fmt(totD)}</b></td><td class="fzr info"></td></tr>`);
   });
   if(!hay){ wrap.style.display="none"; foot.innerHTML=""; return; }
   wrap.style.display="";
@@ -1334,7 +1352,7 @@ function actualizarStickyPtoDerecha(tableId){
 window.addEventListener("resize",()=>{
   if(document.getElementById("view-pto").style.display==="none") return;
   if(document.getElementById("ptoSubMain").style.display!=="none"){ actualizarStickyPto(); actualizarStickyPtoDerecha(); }
-  else if(document.getElementById("ptoSubApert").style.display!=="none"){ actualizarStickyPto("paTabla"); actualizarStickyPtoDerecha("paTabla"); }
+  else if(document.getElementById("ptoSubApert").style.display!=="none"){ ["paTabla","paPtoTabla","paInfTabla"].forEach(id=>{ actualizarStickyPto(id); actualizarStickyPtoDerecha(id); }); }
 });
 let pMostrarDetallePto=false; // Base/Pto Pesos/Pto-mes empiezan escondidos: son de consulta ocasional
                                // y ocupan lugar que se necesita para ver más meses de gasto real.
@@ -1900,12 +1918,12 @@ async function cargarTodoDesdeSupabase(){
     cargarClave('APERTURA_AUX2_DETALLE'),cargarClave('APERTURA_ORDEN_AUX0N'),cargarClave('APERTURA_ESTRUCTURA_TOTAL')
   ]);
   let hubo=false;
-  if(d&&d.grupos){ DATA.grupos=d.grupos; DATA.meses=d.meses||DATA.meses; hubo=true; }
+  if(d&&d.grupos){ DATA.grupos=d.grupos; DATA.meses=completarMeses(d.meses||DATA.meses); hubo=true; }
   if(cp&&cp.length){ CONFIG_PTO.length=0; cp.forEach(c=>CONFIG_PTO.push(c)); hubo=true; }
-  if(pd){ Object.assign(PROJ_DATA,pd); hubo=true; }
+  if(pd){ Object.assign(PROJ_DATA,pd); PROJ_DATA.meses=completarMeses(PROJ_DATA.meses); hubo=true; }
   if(ov){ Object.assign(OVERRIDES,ov); hubo=true; }
   if(pov){ PROJ_OV.proj=pov.proj||{}; PROJ_OV.row=pov.row||{}; hubo=true; }
-  if(pc){ PROY_CTRL.meses=pc.meses||[]; PROY_CTRL.proyectos=pc.proyectos||{}; hubo=true; }
+  if(pc){ PROY_CTRL.meses=completarMeses(pc.meses||[]); PROY_CTRL.proyectos=pc.proyectos||{}; hubo=true; }
   if(poc){ Object.assign(PROY_CTRL_OC,poc); hubo=true; }
   if(ppf){ Object.assign(PROY_CTRL_PF,ppf); hubo=true; }
   if(pman){ Object.assign(PROY_CTRL_MANUAL,pman); hubo=true; }
@@ -2190,7 +2208,7 @@ function mergeEERRIntoData(res){
     Object.assign(byKey[k],serieFiltrada);
   });
   const grupos=Object.keys(byKey).filter(k=>Object.keys(byKey[k]).length).map(k=>{const[grupo,movim]=k.split("\u241F");return{grupo,movim,serie:byKey[k]};});
-  DATA.meses=meses; DATA.grupos=grupos;
+  DATA.meses=completarMeses(meses); DATA.grupos=grupos;
 }
 /* Presupuesto\u00B7Estructura: mismas filas "02 - EERR" que el EERR, pero agregadas por cuenta puntual
    (columna "Cuenta") en vez de por el grupo entero -- es el detalle que necesita cada l\u00EDnea de
@@ -3331,7 +3349,14 @@ window.agregarVigenciaApertura=agregarVigenciaApertura;
    (Cuenta, Grupo) con movimientos que no este en CONFIG_PTO se agrega con Pto 0, base mensual y SIN
    responsable (no se inventa uno: se asigna a mano), y con la misma convencion de key que las demas
    ("NQN·Cuenta" para NQN). Los meses bloqueados (HIST_LOCK) no se tocan, como siempre. Devuelve las
-   cuentas agregadas para avisarlo en el mensaje de la carga. */
+   cuentas agregadas para avisarlo en el mensaje de la carga.
+   Hallazgo 2026-10-06 (Muebles y Utiles): el historico cargado ANTES de este cambio (ago-22..mar-25) no
+   agrego cuentas que Presupuesto no tenia (ej. "Muebles y Utiles (AJ RT 6)", con gasto en nov-22, feb-23,
+   ago-24...), asi que la tabla "Informe de Estructura" de Apertura mostraba diferencia en esos meses. Se
+   corrige repitiendo la carga del historico, en este orden (con el bloqueo puesto antes del crudo actual,
+   porque si no el crudo actual "borra" los meses historicos que no trae): 1) Bloquear hasta: "Sin bloqueo";
+   2) cargar el crudo historico; 3) Bloquear hasta mar-25; 4) cargar el crudo actual (abr-25 en adelante).
+   Verificado en un navegador real (Playwright) con estado previo simulado: la diferencia queda en "–". */
 function agregarCuentasNuevasAConfigPto(resCuentas){
   const existentes=new Set(CONFIG_PTO.map(c=>c.cuenta+"\u241F"+c.grupo));
   const keys=new Set(CONFIG_PTO.map(c=>c.key));
@@ -3442,7 +3467,7 @@ function parseRawLedgerProyectos(rows){
   return{meses:[...mesesSet].sort(),proyectos};
 }
 function mergeProyCtrlIntoData(res){
-  const mesesSet=new Set([...PROY_CTRL.meses,...res.meses]); PROY_CTRL.meses=[...mesesSet].sort();
+  const mesesSet=new Set([...PROY_CTRL.meses,...res.meses]); PROY_CTRL.meses=completarMeses([...mesesSet]);
   Object.keys(res.proyectos).forEach(cod=>{
     if(!PROY_CTRL.proyectos[cod]) PROY_CTRL.proyectos[cod]={desc:res.proyectos[cod].desc,cats:{},comprasProv:{},comprasDet:{}};
     else if(res.proyectos[cod].desc) PROY_CTRL.proyectos[cod].desc=res.proyectos[cod].desc;
@@ -3678,7 +3703,7 @@ function aplicarCMVDesdeCrudo(resC){
   // se conservan tal cual, vengan o no en el archivo nuevo.
   const mesesNuevos=resC.meses.filter(m=>!mesBloqueado(m));
   const mesesViejosBloqueados=PROJ_DATA.meses.filter(m=>mesBloqueado(m));
-  PROJ_DATA.meses=[...new Set([...mesesViejosBloqueados,...mesesNuevos])].sort();
+  PROJ_DATA.meses=completarMeses([...new Set([...mesesViejosBloqueados,...mesesNuevos])]);
   mesesNuevos.forEach(ym=>{ const f=axiFactorFor(ym); PROJ_DATA.mult[ym]=f!=null?f:1; });
   const porCodigo={};
   PROJ_DATA.aperturas.forEach(a=>{
@@ -3993,7 +4018,8 @@ async function onCargarInformeCrudo(file){
     await cargarClasifProyectosSupabase();
     await fetchLiveTC();
     const res=parseRawLedgerEERR(rows);
-    const mesesActuales=DATA.meses.filter(m=>!mesBloqueado(m));
+    const mesesConDatos=new Set(); DATA.grupos.forEach(g=>Object.keys(g.serie).forEach(m=>mesesConDatos.add(m))); // los meses rellenados en cero no cuentan
+    const mesesActuales=[...mesesConDatos].sort().filter(m=>!mesBloqueado(m));
     const mesesArchivoSet=new Set(res.meses);
     const mesesQueDesaparecen=mesesActuales.filter(m=>!mesesArchivoSet.has(m));
     if(mesesQueDesaparecen.length){
