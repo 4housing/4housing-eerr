@@ -906,7 +906,12 @@ function detalleAperturaCuenta(cuenta){
   // despues). Se filtra al LEER, no al cargar: APERTURA_DETALLE y APERTURA_AUX2_DETALLE conservan todos los
   // Grupos, porque aux2ItemsParaTx necesita saber cuando un comprobante mezcla Estructura con Inversion para
   // partir los bienes por importe. APERTURA_GRUPOS_PERMITIR/EXCLUIR siguen actuando adentro de esto.
-  const gruposEstructura=["K) ESTRUCTURA","K) ESTRUCTURA NQN"].map(normApertura);
+  // Excepcion (2026-10-06, Micaela se equivoco y lo pidio de vuelta): Muebles y Utiles, Rodados, Herramientas
+  // y Mantenimiento Bs de Uso siguen abriendo por Estructura / Estructura NQN / INVERSION (M) INVERSIONES),
+  // como antes -- ahi el analisis es justamente "esto se clasifico como Estructura o como Inversion". Siguen
+  // incluidas todas sus cuentas contables (ej. Muebles y Utiles (No Usar) y (AJ RT 6)); P) PROVEEDORES y
+  // Q) AJUSTES CTAS siguen afuera (APERTURA_GRUPOS_PERMITIR).
+  const gruposEstructura=["K) ESTRUCTURA","K) ESTRUCTURA NQN",...(APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta]?["M) INVERSIONES"]:[])].map(normApertura);
   const todo=(APERTURA_DETALLE[cuenta]||[]).filter(t=>gruposEstructura.includes(normApertura(t.grupo)));
   const permitir=APERTURA_GRUPOS_PERMITIR[cuenta];
   if(permitir&&permitir.length) return todo.filter(t=>permitir.some(g=>normApertura(g)===normApertura(t.grupo)));
