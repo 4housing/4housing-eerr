@@ -1621,17 +1621,9 @@ function renderPtoApertura(){
     ?(gruposK.includes(normApertura(c.grupo))&&(!grupoSel||normApertura(filtroFnPto({cuenta:c.cuenta}))===normApertura(grupoSel)))
     :gruposPto.includes(normApertura(c.grupo)))).map(c=>c.key);
   const conceptosSueltos=filtroFnPto?[]:ptoConceptos.filter(k=>!keyCuentaDeConcepto(cuenta,k));
-  const primerDesdeKey=key=>{
-    const cs=conceptosSumadosDeKey(key);
-    const ds=cs.length?cs.flatMap(({cta,con})=>(((APERTURA_PTO[cta]||{})[con]||{}).historial||[]).map(e=>e.desde)):((OVERRIDES[key]||{}).historial||[]).map(e=>e.desde);
-    return ds.length?ds.reduce((a,b)=>a<b?a:b):null;
-  };
   const ptoMesFn=m=>{
     let t=0;
-    keysPto.forEach(key=>{
-      const pd=primerDesdeKey(key); if(!pd||m<pd) return;
-      const v=ptoEnMesMoneda(key,m,cur); t+=((OVERRIDES[key]||{}).base==="anual"&&!conceptosSumadosDeKey(key).length)?v/12:v;
-    });
+    keysPto.forEach(key=>{ t+=ptoMesCuentaKey(key,m,cur); });
     conceptosSueltos.forEach(k=>{ t+=aperturaPtoEnMesMoneda(cuenta,k,m,cur); });
     return t;
   };
@@ -1656,7 +1648,11 @@ function renderPtoApertura(){
   // Fila "Desvío": Pto - Real de cada mes (vacío en los meses sin Pto todavía); el Total es la
   // sumatoria de esas mismas diferencias del período visible. Positivo (verde) = por debajo del
   // Pto; negativo (rojo) = lo superó.
-  const desvios=colTotBase.map((v,i)=>ptoPorMes[i]?ptoPorMes[i]-v:null);
+  // 2026-10-16: desde la fecha base el Desvío se calcula aunque el mes no tenga Pto (gasto sin presupuestar =
+  // desvío negativo), igual que las filas globales de Presupuesto·Estructura, para que la suma de los desvíos de
+  // cada apertura coincida con el desvío global del bloque. Antes de la fecha base queda vacío.
+  const fbDesv=fechaBasePto();
+  const desvios=colTotBase.map((v,i)=>mesesSel[i]>=fbDesv&&(ptoPorMes[i]||v)?ptoPorMes[i]-v:null);
   const desvioCells=desvios.map(d=>{
     const cls=d?(d<0?" over":" under"):"";
     return `<td class="mescol info${cls}" style="text-align:right">${d==null?"–":fmt(d)}</td>`;
@@ -1934,6 +1930,7 @@ window.togglePtoDetalle=togglePtoDetalle;
   });
   const mesesAcum=allm.filter(m=>m>=fechaBaseYM&&m<=ultimo);
   let tRealUlt=0,tPtoUlt=0,tRealPer=0,tPtoPer=0,tAcumMensual=0,over=0; const colTot=meses.map(()=>0);
+  const colPtoG=meses.map(()=>0); // Pto global del mes (ver filas "Pto" y "Desvío" debajo de TOTAL)
   const body=rows.map(c=>{
     const esSumaAp=conceptosSumadosDeKey(c.key).length>0;
     const ov=OVERRIDES[c.key],base=esSumaAp?"mensual":ov.base; // la suma de la apertura ya es mensual (cada concepto aporta su parte por mes)
@@ -1942,6 +1939,7 @@ window.togglePtoDetalle=togglePtoDetalle;
     const ptoMesFn=m=>{const v=ptoEnMesMoneda(c.key,m,cur);return base==="anual"?v/12:v;};
     const ptoMesUlt=ptoMesFn(ultimo);
     const reals=meses.map(m=>{const s=c.serie[m];return s?s[cur]:0;}); reals.forEach((v,k)=>colTot[k]+=v);
+    meses.forEach((m,k)=>{ if(m>=fechaBaseYM) colPtoG[k]+=ptoMesCuentaKey(c.key,m,cur); });
     const realUlt=(c.serie[ultimo]?c.serie[ultimo][cur]:0), desvUlt=realUlt-ptoMesUlt;
     const realPer=reals.reduce((s,v)=>s+v,0);
     const ptoPer=meses.reduce((s,m)=>s+ptoMesFn(m),0);
@@ -1972,6 +1970,14 @@ window.togglePtoDetalle=togglePtoDetalle;
   }).join("");
   const tDesvUlt=tRealUlt-tPtoUlt;
   const totCells=colTot.map(v=>`<td class="mescol"><b>${v?fmt(v):"–"}</b></td>`).join("");
+  // 2026-10-16 (a pedido de Micaela): Pto y Desvío GLOBAL de cada mes del bloque, debajo de TOTAL. Mismo calculo
+  // que la fila Pto/Desvío de Apertura (ptoMesCuentaKey, desde la fecha base, Desvío = Pto − Real; gasto sin Pto
+  // = desvío negativo): la suma de los desvíos de las aperturas del bloque da este total.
+  const fixedVacias=`<td class="fz fz2"></td>${pMostrarDetallePto?`<td class="fz fz3 info"></td><td class="fz fz4 info"></td><td class="fz fz5 grp info"></td>`:""}`;
+  const desvG=meses.map((m,k)=>m>=fechaBaseYM?colPtoG[k]-colTot[k]:null);
+  const ptoGRow=`<tr><td class="fz fz1 info"><b>Pto</b></td>${fixedVacias}${meses.map((m,k)=>`<td class="mescol info">${m>=fechaBaseYM&&colPtoG[k]?fmt(colPtoG[k]):"–"}</td>`).join("")}<td class="real fzr info"><b>${fmt(colPtoG.reduce((a,b)=>a+b,0))}</b></td><td class="info fzr"></td><td class="info fzr"></td></tr>`;
+  const desvGTot=desvG.reduce((a,d)=>a+(d||0),0);
+  const desvGRow=`<tr><td class="fz fz1 info" title="Pto − Real de cada mes, desde la fecha base (negativo = gasto por encima del Pto)"><b>Desvío</b> <span style="font-weight:400;opacity:.65">(Pto − Real)</span></td>${fixedVacias}${desvG.map(d=>`<td class="mescol info ${d==null?"":(d<0?"over":"under")}">${d==null?"–":fmt(d)}</td>`).join("")}<td class="real fzr info ${desvGTot<0?"over":"under"}"><b>${fmt(desvGTot)}</b></td><td class="info fzr"></td><td class="info fzr"></td></tr>`;
   const totalRow=`<tr class="result"><td class="fz fz1">TOTAL</td><td class="fz fz2"></td>${pMostrarDetallePto?`<td class="fz fz3 info"></td><td class="fz fz4 info"></td><td class="fz fz5 grp info">${fmt(tPtoUlt)}</td>`:""}${totCells}<td class="real fzr"><b>${fmt(tRealPer)}</b></td><td class="info fzr ${tDesvUlt>0?"over":"under"}">${fmt(tDesvUlt)}</td><td class="info fzr ${tAcumMensual>0?"over":"under"}" title="Suma solo de cuentas mensuales; las anuales se ven en % por fila">${fmt(tAcumMensual)}</td></tr>`;
   const monthHdr=meses.map(m=>`<th class="real mescol">${mesLabel(m)}</th>`).join("");
   document.getElementById("pTabla").className="grid";
@@ -1983,7 +1989,7 @@ window.togglePtoDetalle=togglePtoDetalle;
       <th class="fz fz4 info">Pto ${curTag}<br><small style="font-weight:400;opacity:.6">base ${esc(mesLabel(fechaBaseYM))}</small></th>
       <th class="fz fz5 grp info">Pto/mes<br><small style="font-weight:400;opacity:.6">${esc(mesLabel(ultimo||fechaBaseYM))}</small></th>`:""}${monthHdr}
       <th class="real fzr">Total real</th><th class="info fzr">Desvío últ. mes</th><th class="info fzr">Acum. desde ${esc(mesLabel(fechaBaseYM))}</th>
-    </tr></thead><tbody>${body}${totalRow}</tbody>`;
+    </tr></thead><tbody>${body}${totalRow}${ptoGRow}${desvGRow}</tbody>`;
   document.querySelectorAll('.ptofbtn').forEach(el=>el.addEventListener('click',ev=>openPtoColFilter(el.dataset.col,ev,rowsPreCol)));
   colResizeInit(document.getElementById("pTabla"));
   requestAnimationFrame(()=>{ actualizarStickyPto(); actualizarStickyPtoDerecha(); });
@@ -3914,6 +3920,20 @@ const APERTURA_CONCEPTO_BLOQUE={
   "Alquileres":{"PRINCI":"K) ESTRUCTURA","BERGER":"K) ESTRUCTURA","Expensas Of. CABA":"K) ESTRUCTURA","SPWORK":"K) ESTRUCTURA NQN"},
   "Movilidad Combustible":{"Combustible":"K) ESTRUCTURA","Peajes":"K) ESTRUCTURA","Remises":"K) ESTRUCTURA","Estacionamiento":"K) ESTRUCTURA","ContaParam":"K) ESTRUCTURA"}
 };
+/* 2026-10-16: Pto mensual de una cuenta de Presupuesto (key) en el mes ym y en la moneda cur, SIN extrapolar hacia
+   atras (0 antes de su primera vigencia) y con la base anual repartida 1/12 -- el mismo calculo para la fila Pto de
+   Apertura y para las filas globales "Pto" / "Desvío" de Presupuesto·Estructura, asi la suma de las aperturas
+   coincide con el global del bloque. */
+function primerDesdePtoKey(key){
+  const cs=conceptosSumadosDeKey(key);
+  const ds=cs.length?cs.flatMap(({cta,con})=>(((APERTURA_PTO[cta]||{})[con]||{}).historial||[]).map(e=>e.desde)):((OVERRIDES[key]||{}).historial||[]).map(e=>e.desde);
+  return ds.length?ds.reduce((a,b)=>a<b?a:b):null;
+}
+function ptoMesCuentaKey(key,ym,cur){
+  const pd=primerDesdePtoKey(key); if(!pd||ym<pd) return 0;
+  const v=ptoEnMesMoneda(key,ym,cur);
+  return ((OVERRIDES[key]||{}).base==="anual"&&!conceptosSumadosDeKey(key).length)?v/12:v;
+}
 let SUMA_APERTURA_CACHE=null;
 function invalidarSumaApertura(){ SUMA_APERTURA_CACHE=null; }
 function keyCuentaDeConcepto(cta,con){
