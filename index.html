@@ -319,6 +319,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   </div>
   <div id="ptoSubHist" style="display:none">
     <div class="controls">
+      <div class="ctl"><label for="phBloque">Bloque</label><select id="phBloque"><option value="K) ESTRUCTURA">Estructura</option><option value="K) ESTRUCTURA NQN">Estructura NQN</option><option value="N) SUELDOS">Sueldos</option><option value="O) IMPUESTOS">Impuestos</option></select></div>
       <div class="ctl"><label for="phCuenta">Cuenta</label><select id="phCuenta"></select></div>
       <div class="ctl" id="phConceptoWrap" style="display:none"><label for="phConcepto">Concepto</label><select id="phConcepto"></select></div>
       <div class="ctl"><label for="phMes">Desde (fecha base)</label><select id="phMes" disabled></select></div>
@@ -782,8 +783,7 @@ async function initPto(){
     const vigLink=e.target.closest(".vig-link");
     if(vigLink){
       showPtoSub("hist");
-      const sel=document.getElementById("phCuenta");
-      if(sel){ sel.value=vigLink.dataset.c; renderPtoHist(); }
+      seleccionarCuentaHist(vigLink.dataset.c);
     }
   });
   const togglePto=document.getElementById("pTogglePtoPesos");
@@ -808,15 +808,15 @@ function eliminarVigencia(key,desde){
 window.eliminarVigencia=eliminarVigencia;
 function initPtoHist(){
   const sel=document.getElementById("phCuenta");
-  sel.innerHTML="";sel.add(new Option("Todas las cuentas",""));
-  CONFIG_PTO.slice().sort((a,b)=>a.cuenta<b.cuenta?-1:1).forEach(c=>sel.add(new Option(c.cuenta,c.key)));
+  poblarCuentasHist();
   const mesSel=document.getElementById("phMes");
   actualizarMesHist();
   // Si la cuenta elegida tiene Apertura de Estructura (ej. Alquileres), se puede elegir ademas un
   // Concepto puntual (ej. PRINCI) para darle su propia vigencia, en vez de la de toda la cuenta.
   const conceptoWrap=document.getElementById("phConceptoWrap"), conceptoSel=document.getElementById("phConcepto");
   function actualizarConceptoSel(){
-    const conceptos=conceptosDeApertura(cuentaNombrePorKey(sel.value));
+    const cfgSel=CONFIG_PTO.find(c=>c.key===sel.value);
+    const conceptos=conceptosDeApertura(cuentaNombrePorKey(sel.value),cfgSel?cfgSel.grupo:"");
     if(!conceptos.length){ conceptoWrap.style.display="none"; conceptoSel.innerHTML=""; return; }
     conceptoWrap.style.display="";
     const actual=conceptoSel.value;
@@ -825,6 +825,7 @@ function initPtoHist(){
     if(conceptos.includes(actual)) conceptoSel.value=actual;
   }
   sel.addEventListener("change",()=>{actualizarConceptoSel();renderPtoHist();});
+  document.getElementById("phBloque").addEventListener("change",()=>{poblarCuentasHist();actualizarConceptoSel();renderPtoHist();});
   actualizarConceptoSel();
   document.getElementById("phAddBtn").addEventListener("click",()=>{
     if(!editable){alert('Desbloqueá la edición en Presupuesto·Estructura primero (botón "Desbloquear (Gerencia)").');return;}
@@ -842,6 +843,31 @@ function initPtoHist(){
 }
 // El "Desde" del formulario de Historial es siempre la fecha base de Config Pto (ver
 // normalizarVigenciasOverrides): se refresca en cada render por si se cambio la fecha base.
+/* 2026-10-16 (a pedido de Micaela): el desplegable de Cuenta mostraba "duplicadas" -- en realidad es la
+   misma cuenta en bloques distintos (ej. Alquileres de Estructura y de Estructura NQN; Cta part de
+   Estructura y de Impuestos), cada una con su propio Pto. Ahora se elige primero el Bloque y Cuenta lista
+   solo las de ese bloque, una vez cada una, en el orden fijo (ORDEN_CUENTAS_ESTRUCTURA). Con "Todas las
+   cuentas" la tabla muestra las de ese bloque (mas los conceptos de Apertura). */
+function poblarCuentasHist(){
+  const sel=document.getElementById("phCuenta"), bSel=document.getElementById("phBloque"); if(!sel||!bSel) return;
+  const actual=sel.value, b=bSel.value;
+  const lista=CONFIG_PTO.filter(c=>c.grupo===b).sort((x,y)=>{
+    const px=posOrdenCuenta(x.cuenta), py=posOrdenCuenta(y.cuenta);
+    if(px!==py) return px<py?-1:1;
+    return x.cuenta.localeCompare(y.cuenta,'es');
+  });
+  sel.innerHTML=""; sel.add(new Option("Todas las cuentas",""));
+  const vistas=new Set();
+  lista.forEach(c=>{ if(vistas.has(c.key)) return; vistas.add(c.key); sel.add(new Option(c.cuenta,c.key)); });
+  sel.value=vistas.has(actual)?actual:"";
+}
+// Desde el reloj 🕘 de Presupuesto: elige el bloque de esa cuenta y la cuenta, y actualiza Concepto/tabla.
+function seleccionarCuentaHist(key){
+  const c=CONFIG_PTO.find(x=>x.key===key), bSel=document.getElementById("phBloque"), sel=document.getElementById("phCuenta");
+  if(!sel) return;
+  if(c&&bSel&&[...bSel.options].some(o=>o.value===c.grupo)) bSel.value=c.grupo;
+  poblarCuentasHist(); sel.value=key; sel.dispatchEvent(new Event("change"));
+}
 function actualizarMesHist(){
   const mesSel=document.getElementById("phMes"); if(!mesSel) return;
   const fb=fechaBasePto();
@@ -853,10 +879,14 @@ function cuentaNombrePorKey(key){ const c=CONFIG_PTO.find(x=>x.key===key); retur
 // clasificadas, mas los que ya tengan un Pto cargado aunque ya no tengan movimientos (ej. el
 // alquiler que se da de baja por la compra del terreno, pero cuyo historial de vigencias sigue
 // siendo util ver).
-function conceptosDeApertura(cuenta){
+// 2026-10-16: con "grupo" (el Bloque elegido en Historial: Estructura o Estructura NQN) solo se listan los
+// conceptos con movimientos de ese bloque (antes se mezclaban, ej. en Seguridad Alarmas salian PROSEG/ZAMIGU
+// de NQN junto con SEGUME/VALERO de Estructura). Los conceptos que ya tienen Pto cargado se muestran siempre.
+function conceptosDeApertura(cuenta,grupo){
   const clasFn=CLASIF_APERTURA_FN[cuenta]; if(!clasFn) return [];
   const set=new Set();
-  detalleAperturaCuenta(cuenta).forEach(t=>set.add(clasFn(t)||"Otros"));
+  const filtraGrupo=grupo==="K) ESTRUCTURA"||grupo==="K) ESTRUCTURA NQN";
+  detalleAperturaCuenta(cuenta).forEach(t=>{ if(!filtraGrupo||normApertura(t.grupo)===normApertura(grupo)) set.add(clasFn(t)||"Otros"); });
   Object.keys(APERTURA_PTO[cuenta]||{}).forEach(k=>set.add(k));
   return [...set].sort();
 }
@@ -935,6 +965,7 @@ function renderPtoHist(){
   const sel=document.getElementById("phCuenta"); if(!sel) return;
   actualizarMesHist();
   const filtroKey=sel.value;
+  const bSelH=document.getElementById("phBloque"), bloqueSel=bSelH?bSelH.value:"";
   document.getElementById("phLockNote").textContent=editable?"Edición habilitada (Gerencia)":"Edición bloqueada (ver Presupuesto·Estructura para desbloquear)";
   const cuentasPorKey={}; CONFIG_PTO.forEach(c=>cuentasPorKey[c.key]=c);
   let filas=[];
@@ -942,6 +973,7 @@ function renderPtoHist(){
     if(key==="__cfg__") return;
     if(filtroKey&&key!==filtroKey) return;
     const h=OVERRIDES[key].historial||[]; const c=cuentasPorKey[key];
+    if(!filtroKey&&bloqueSel&&(!c||c.grupo!==bloqueSel)) return;
     const bloque=c?(PH_BLOQUE_LBL[c.grupo]||c.grupo||""):"";
     h.forEach(e=>filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,desde:e.desde,pto:e.pto}));
   });
