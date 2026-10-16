@@ -1596,7 +1596,11 @@ function renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur){
   // consistentes; los conceptos con Pto que todavia no entraron en ese orden van al final.
   const ordenGuardado=(APERTURA_ORDEN[cuenta]||[]).filter(k=>ptoKeys.includes(k));
   const resto=ptoKeys.filter(k=>!ordenGuardado.includes(k)).sort();
-  const conConceptoPto=[...ordenGuardado,...resto];
+  // 2026-10-16 (a pedido de Micaela): primero los conceptos de Estructura y al final los de Estructura NQN
+  // (ej. SPWORK, el alquiler de Neuquen, queda ultimo en Alquileres) -- mezclados confundia. Dentro de cada
+  // bloque se respeta el orden de antes. El bloque es el de la cuenta en que suma (keyCuentaDeConcepto).
+  const rangoBloque=k=>{ const key=keyCuentaDeConcepto(cuenta,k); const c=key?CONFIG_PTO.find(x=>x.key===key):null; return c&&c.grupo==="K) ESTRUCTURA NQN"?1:0; };
+  const conConceptoPto=[...ordenGuardado,...resto].map((k,i)=>({k,i,r:rangoBloque(k)})).sort((a,b)=>a.r-b.r||a.i-b.i).map(x=>x.k);
   if(!conConceptoPto.length || !mesesSel.length){ wrap.style.display="none"; foot.innerHTML=""; return; }
   wrap.style.display="";
   const colTot=mesesSel.map(()=>0);
