@@ -417,6 +417,10 @@ const MES_ABBR=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov
 const mesLabel=ym=>{const[y,m]=ym.split("-");return MES_ABBR[+m-1]+"-"+y.slice(2);};
 const MESES=DATA.meses;
 const fmt=v=>new Intl.NumberFormat("es-AR",{maximumFractionDigits:0}).format(Math.round(v||0));
+// 2026-10-16 (a pedido de Micaela): simbolo y nombre de la moneda elegida (0 pesos, 1 USD oficial,
+// 2 USD billete, 3 AXI) -- antes los KPI y tooltips decian "$" aunque se viera en USD.
+const MONEDA_SIMB=["$","US$","US$","$"], MONEDA_NOMBRE=["pesos","USD oficial","USD billete","ajustado x inflación (AXI)"];
+function monedaDe(selId){ const el=document.getElementById(selId); const c=el?(+el.value||0):0; return {cur:c,simb:MONEDA_SIMB[c]||"$",nombre:MONEDA_NOMBRE[c]||"pesos"}; }
 const fmtM=v=>{const a=Math.abs(v||0);return a>=1e9?(v/1e9).toFixed(2)+" MM":a>=1e6?(v/1e6).toFixed(1)+" M":fmt(v);};
 // Clase de color por signo (a pedido de Micaela, para los detalles de Apertura de Estructura):
 // negativo en rojo, positivo/cero en negro (el color de texto normal -- no el verde de "pos" que usa
@@ -476,7 +480,7 @@ function recompute(){
   document.getElementById("kpis").innerHTML=[
     ["Ventas",ventasBruto,"A) VENTA, bruto"],["Margen bruto",margen,"ventas − CMV de venta (A)"],
     ["Resultado operativo",resOp,"estructura (alquileres, sueldos, impuestos)"],["Resultado neto",resNeto,"incl. otros resultados (G,I,J) e inversiones (M), excl. P y Q"]
-  ].map(c=>`<div class="kpi"><div class="k-lbl">${c[0]}</div><div class="k-val" style="color:${c[1]>=0?"var(--income)":"var(--cost)"}">$ ${fmtM(c[1])}</div><div class="k-sub">${c[2]}</div></div>`).join("");
+  ].map(c=>`<div class="kpi"><div class="k-lbl">${c[0]}</div><div class="k-val" style="color:${c[1]>=0?"var(--income)":"var(--cost)"}">${monedaDe("cur").simb} ${fmtM(c[1])}</div><div class="k-sub">${c[2]} · en ${monedaDe("cur").nombre}</div></div>`).join("");
   renderTabla(pg,meses,bloques);
   try{renderCharts(pg,meses,bloques);}catch(e){console.warn("charts:",e);
     document.getElementById("chMes").parentNode.innerHTML="<div style='color:var(--muted);font-size:12px;padding:20px'>Gráfico no disponible en este entorno.</div>";}
@@ -488,7 +492,7 @@ function fila(nombre,chip,chipTxt,serie,meses,total,cls){
   return `<tr class="${cls||""}"><td>${label}</td>${tds}<td class="${total>=0?"pos":"neg"}"><b>${fmt(total)}</b></td></tr>`;
 }
 function renderTabla(pg,meses,b){
-  const head=`<thead><tr><th>Concepto</th>${meses.map(m=>`<th>${mesLabel(m)}</th>`).join("")}<th>Total período</th></tr></thead>`;
+  const head=`<thead><tr><th>Concepto <span style="font-weight:400;opacity:.65">(en ${monedaDe("cur").nombre})</span></th>${meses.map(m=>`<th>${mesLabel(m)}</th>`).join("")}<th>Total período</th></tr></thead>`;
   let rows="";
   const secRow=tt=>rows+=`<tr class="section"><td colspan="${meses.length+2}"><span class="seclbl">${tt}</span></td></tr>`;
   const bloque=(sec,chip)=>pg.filter(x=>x.sec===sec).sort((a,b)=>ordenEnBloque(a.grupo)-ordenEnBloque(b.grupo)).forEach(x=>rows+=fila(x.grupo,chip,x.letra,x.serie,meses,x.tot));
@@ -514,7 +518,7 @@ function baseOpts(legend){
     responsive:true,maintainAspectRatio:false,
     plugins:{
       legend:{display:legend!==false,labels:{boxWidth:12,font:{size:11},color:"#6C6557"}},
-      tooltip:{callbacks:{label:c=>` ${c.dataset.label}: $ ${fmtM(c.parsed.y)}`}}
+      tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${monedaDe("cur").simb} ${fmtM(c.parsed.y)}`}}
     },
     scales:{
       x:{grid:{display:false},ticks:{color:"#8B8473",font:{size:11}}},
@@ -546,7 +550,7 @@ function renderCharts(pg,meses,bloques){
   if(chLinea)chLinea.destroy();
   chLinea=new Chart(document.getElementById("chLinea"),{type:"bar",data:{labels:L.map(l=>nom[l]),datasets:[{label:"Resultado",data:netos,backgroundColor:netos.map(v=>v>=0?"#9BC0A4":"#D7A293"),borderRadius:4}]},options:{
     responsive:true,maintainAspectRatio:false,indexAxis:"y",
-    plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label}: $ ${fmtM(c.parsed.x)}`}}},
+    plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label}: ${monedaDe("cur").simb} ${fmtM(c.parsed.x)}`}}},
     scales:{
       x:{grid:{color:"#EFE9DA"},ticks:{color:"#8B8473",font:{size:11},callback:v=>fmtM(v)}}, // eje de valor, mismo formato que los otros dos gráficos
       y:{grid:{display:false},ticks:{color:"#8B8473",font:{size:11}}} // eje de categoría: nombres, sin formatear como número
@@ -651,6 +655,10 @@ function pesosEnMes(monto,origenYM,destinoYM){
   return monto*(fo/fd);
 }
 function ptoVigente(key,ym){
+  // 2026-10-16: si la cuenta tiene apertura por concepto con Pto, su Pto es la SUMA de esos conceptos
+  // (ver conceptosSumadosDeKey); el Pto cargado a nivel cuenta queda guardado pero no se usa.
+  const cs=conceptosSumadosDeKey(key);
+  if(cs.length) return ptoVigenteSumaApertura(cs,ym);
   const h=(OVERRIDES[key]||{}).historial;
   if(!h||!h.length) return null;
   let elegido=h[0];
@@ -771,7 +779,8 @@ async function initPto(){
   const ms=pMonths(),pd=document.getElementById("pDesde"),ph=document.getElementById("pHasta");
   ms.forEach((m,i)=>{pd.add(new Option(mesLabel(m),i));ph.add(new Option(mesLabel(m),i));});
   pd.value=indiceFechaBase(ms);ph.value=ms.length-1;
-  ["pResp","pFiltro","pDesde","pHasta","pBloque"].forEach(id=>document.getElementById(id).addEventListener("change",renderPto));
+  // 2026-10-16: faltaba "pMoneda" -- al cambiar la moneda la tabla no se actualizaba (a pedido de Micaela).
+  ["pResp","pFiltro","pDesde","pHasta","pBloque","pMoneda"].forEach(id=>document.getElementById(id).addEventListener("change",renderPto));
   document.getElementById("pTabla").addEventListener("change",e=>{
     if(!editable)return;const c=e.target.dataset.c;if(!c||!OVERRIDES[c])return;
     if(e.target.classList.contains("base-sel"))OVERRIDES[c].base=e.target.value;
@@ -828,7 +837,19 @@ function initPtoHist(){
     const ptoInp=document.getElementById("phPto");
     const pto=parseFloat(String(ptoInp.value).replace(/\./g,"").replace(/,/g,"."))||0;
     const concepto=document.getElementById("phConcepto").value;
-    if(concepto) agregarVigenciaApertura(cuentaAperturaDeReal(cuentaNombrePorKey(key)),concepto,desde,pto);
+    const sumados=conceptosSumadosDeKey(key);
+    if(!concepto&&sumados.length){ alert("Esta cuenta es la suma de su apertura: elegí el concepto que querés modificar."); return; }
+    if(concepto){
+      const cta=cuentaAperturaDeReal(cuentaNombrePorKey(key));
+      const yaSuma=sumados.some(x=>x.cta===cta&&x.con===concepto);
+      if(!sumados.length){
+        const v=ptoVigente(key,desde);
+        if(v&&v.pto&&!confirm(`"${cuentaNombrePorKey(key)}" (${(PH_BLOQUE_LBL[(CONFIG_PTO.find(c=>c.key===key)||{}).grupo]||"")}) va a pasar a ser la SUMA de su apertura por concepto.\nEl Pto que hoy tiene cargado a nivel cuenta (${fmt(v.pto)}) deja de usarse (queda guardado).\n¿Seguir?`)) return;
+      }
+      agregarVigenciaApertura(cta,concepto,desde,pto);
+      const ent=(APERTURA_PTO[cta]||{})[concepto];
+      if(ent&&!yaSuma&&!ent.key){ ent.key=key; saveAperturaPto(); }
+    }
     else agregarVigencia(key,desde,pto);
     ptoInp.value="";
     renderPtoHist(); renderPto();
@@ -888,7 +909,9 @@ function actualizarConceptoHist(){
   if(!conceptos.length){ wrap.style.display="none"; cSel.innerHTML=""; return; }
   wrap.style.display="";
   const actual=cSel.value;
-  cSel.innerHTML='<option value="">(Pto de la cuenta completa)</option>';
+  // Si la cuenta ya es la suma de su apertura, no se carga Pto a la cuenta completa (se modifica cada concepto).
+  const esSuma=cfg&&conceptosSumadosDeKey(cfg.key).length>0;
+  cSel.innerHTML=esSuma?"":'<option value="">(Pto de la cuenta completa)</option>';
   conceptos.forEach(k=>cSel.add(new Option(k,k)));
   if(conceptos.includes(actual)) cSel.value=actual;
 }
@@ -1026,6 +1049,14 @@ function renderPtoHist(){
     const h=OVERRIDES[key].historial||[]; const c=cuentasPorKey[key];
     if(filtroCuenta&&(!c||c.cuenta!==filtroCuenta)) return;
     const bloque=c?(PH_BLOQUE_LBL[c.grupo]||c.grupo||""):"";
+    const cs=conceptosSumadosDeKey(key);
+    if(cs.length){
+      // Cuenta = suma de su apertura: una fila por cada fecha en que cambia algun concepto, con la suma.
+      const ds=[...new Set(cs.flatMap(({cta,con})=>(((APERTURA_PTO[cta]||{})[con]||{}).historial||[]).map(e=>e.desde)))].sort();
+      ds.forEach(d=>{ const v=ptoVigente(key,d); filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,
+        pos:c?posOrdenCuenta(c.cuenta):Infinity,desde:d,pto:v?v.pto:0,suma:true}); });
+      return;
+    }
     h.forEach(e=>filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,
       pos:c?posOrdenCuenta(c.cuenta):Infinity,desde:e.desde,pto:e.pto}));
   });
@@ -1064,15 +1095,17 @@ function renderPtoHist(){
   const q=x=>esc(x||"").replace(/'/g,"\\'");
   const bs='class="btn" style="padding:3px 8px;font-size:11px"';
   const rowsHtml=filas.map(f=>{
-    const btn=!editable?"":(f.concepto
+    const btn=(!editable||f.suma)?"":(f.concepto
       ?`<button ${bs} onclick="prepararModificacionHist(null,'${q(f.cuenta)}','${q(f.concepto)}')">Modificar desde…</button> <button ${bs} onclick="eliminarVigenciaApertura('${q(f.cuenta)}','${q(f.concepto)}','${f.desde}')">Eliminar</button>`
       :`<button ${bs} onclick="prepararModificacionHist('${q(f.key)}')">Modificar desde…</button> <button ${bs} onclick="eliminarVigencia('${q(f.key)}','${f.desde}')">Eliminar</button>`);
-    const ptoCell=editable
+    const ptoCell=f.suma
+      ?`<span title="Suma de su apertura (los conceptos de abajo): se modifica concepto por concepto">Σ <b>${fmt(f.pto)}</b></span>`
+      :editable
       ?`<input class="ph-pto-inp" type="text" inputmode="numeric" value="${fmt(f.pto)}" data-desde="${f.desde}" ${f.concepto?`data-cta="${esc(f.cuenta)}" data-con="${esc(f.concepto)}"`:`data-key="${esc(f.key)}"`} title="Escribí el nuevo Pto y Enter" style="width:100%;box-sizing:border-box;text-align:right;padding:3px 5px;border:1px solid var(--line);border-radius:6px;font-size:11px">`
       :fmt(f.pto);
     const cuentaCell=f.concepto
       ?`<span style="padding-left:16px" class="mut">↳ apertura:</span> ${esc(f.concepto)}`
-      :`<b>${esc(f.cuenta)}</b>`;
+      :`<b>${esc(f.cuenta)}</b>${f.suma?' <span class="mut" style="font-size:10px">= suma de la apertura</span>':""}`;
     return `<tr>
       <td class="ell mut" style="text-align:left" title="${esc(f.bloque)}">${esc(f.bloque)}</td>
       <td class="ell" style="text-align:left" title="${esc(f.cuenta)}${f.concepto?" · "+esc(f.concepto):""}">${cuentaCell}</td>
@@ -1812,7 +1845,7 @@ window.togglePtoDetalle=togglePtoDetalle;
       <td class="fz fz1 ell real" title="${esc(c.cuenta)}">${c.cuenta}${vigLink}</td>
       <td class="fz fz2 ell real" title="${esc(c.responsable||"")}">${iniciales(c.responsable)}</td>
       ${pMostrarDetallePto?`<td class="fz fz3 info"><select class="base-sel" data-c="${esc(c.key)}"${editable?"":" disabled"}><option value="mensual"${base==="mensual"?" selected":""}>M</option><option value="anual"${base==="anual"?" selected":""}>A</option></select></td>
-      <td class="fz fz4 info"><input class="pto-inp" type="text" inputmode="numeric" data-c="${esc(c.key)}" value="${fmt(ptoShow)}"${editable?"":" disabled"}></td>
+      <td class="fz fz4 info">${conceptosSumadosDeKey(c.key).length?`<span title="Suma de su apertura por concepto: se modifica en Historial de cambios, concepto por concepto" style="display:inline-block;width:100%;text-align:right">Σ ${fmt(ptoShow)}</span>`:`<input class="pto-inp" type="text" inputmode="numeric" data-c="${esc(c.key)}" value="${fmt(ptoShow)}"${editable?"":" disabled"}>`}</td>
       <td class="fz fz5 grp info">${fmt(ptoMesUlt)}</td>`:""}${cells}
       <td class="real fzr"><b>${fmt(realPer)}</b></td>
       <td class="info fzr ${desvUlt>0?"over":"under"}">${fmt(desvUlt)}</td>
@@ -2061,10 +2094,10 @@ function renderCMV(){
   const totCells=tM.map(v=>`<td>${fmt(v)}</td>`).join("");
   const A_GR=["A) VENTA","A) CMV VENTA"];let eerrA=0;DATA.grupos.forEach(g=>{if(A_GR.indexOf(g.grupo)>=0){meses.forEach(m=>{const s=g.serie[m];if(s)eerrA+=(cur===3?s[3]:s[cur]);});}});eerrA=SIGN*eerrA;const cmvTot=tM.reduce((s,v)=>s+v,0),difC=eerrA-cmvTot,ccFilt=(exclInv||filtra),ccOk=Math.abs(difC)<Math.max(1,Math.abs(eerrA)*0.001),difClass=ccFilt?"":(ccOk?"cc-ok":"cc-warn"),ccEl=document.getElementById("cmvControl");if(ccEl)ccEl.innerHTML=`<div class="cc-h">Control de cuadre \u00b7 ${cn}</div><div class="cc-grid"><div class="cc-cell"><span>A) VENTAS + A) CMV (EERR)</span><b>${fmt(eerrA)}</b></div><div class="cc-cell"><span>Suma proyectos (CMV)</span><b>${fmt(cmvTot)}</b></div><div class="cc-cell ${difClass}"><span>Diferencia</span><b>${fmt(difC)}</b></div></div>`+(ccFilt?`<div class="cc-note">La diferencia incluye proyectos excluidos por filtro de ejecuci\u00f3n o inversi\u00f3n.</div>`:(ccOk?`<div class="cc-note cc-okt">\u2713 Cuadra con la l\u00ednea A del EERR.</div>`:`<div class="cc-note cc-warnt">Revisar: el Aux3 de proyectos no cuadra con la l\u00ednea A del EERR.</div>`));
   const foot=`<tr><td class="fzc">TOTAL</td><td class="fzc2"></td><td class="cinvcol"></td>${totCells}<td>${fmt(tTot)}</td><td>${fmt(tPU)}</td><td></td><td>${fmt(tPP)}</td><td>${fmt(tSA)}</td><td>${fmt(tSC)}</td><td>${fmt(tSum)}</td><td>${fmt(tDif)}</td><td></td><td></td></tr>`;
-  document.getElementById("cmvTabla").innerHTML=`<thead><tr><th class="fzc">Proyecto</th><th class="fzc2">I/G</th><th class="cinvcol" title="Inversi\u00f3n">I</th>${mh}<th>Total per\u00edodo</th><th>Pto USD</th><th>Pto TC</th><th>Pto $</th><th>Saldo ant.</th><th>S.ant ${cn}</th><th>Sumat acum.</th><th>Dif. Pto \u2212 Sumat</th><th>Inicio</th><th>Cierre</th></tr></thead><tbody>${body}</tbody><tfoot>${foot}</tfoot>`;
+  document.getElementById("cmvTabla").innerHTML=`<thead><tr><th class="fzc">Proyecto <span style="font-weight:400;opacity:.65">(en ${MONEDA_NOMBRE[cur]})</span></th><th class="fzc2">I/G</th><th class="cinvcol" title="Inversi\u00f3n">I</th>${mh}<th>Total per\u00edodo<br><small style="font-weight:400;opacity:.65">en ${MONEDA_NOMBRE[cur]}</small></th><th>Pto USD</th><th>Pto TC</th><th>Pto $</th><th>Saldo ant.</th><th>S.ant ${cn}</th><th>Sumat acum.</th><th>Dif. Pto \u2212 Sumat</th><th>Inicio</th><th>Cierre</th></tr></thead><tbody>${body}</tbody><tfoot>${foot}</tfoot>`;
   const histAnt=PROJ_DATA.meses.length&&PROJ_DATA.meses[0]<"2025-04";
   const saldoTxt=histAnt?"Saldo anterior = saldo previo al inicio del hist\u00f3rico cargado ("+mesLabel(PROJ_DATA.meses[0])+"), tomado del bot\u00f3n \u2018Cargar saldo anterior\u2019 para los proyectos que lo necesitan.":("Saldo anterior precargado del archivo al 31/03/2025 (oficial "+fmtTC(CONV.oficial)+" \u00b7 blue "+fmtTC(CONV.blue)+").");
-  document.getElementById("cmvFoot").innerHTML="Ingresos en positivo y gastos en negativo (como el EERR). Pto = USD \u00d7 TC (manual). "+saldoTxt+" Sumat acum. = saldo anterior + total del per\u00edodo. Columna I = inversi\u00f3n: tild\u00e1 'Excluir del costo' para sacar esas filas (tambi\u00e9n del total). El filtro 'Proy. ejecutados' incluye todo proyecto que se cruce al menos un mes con el rango; los que no tienen fecha cargada siempre aparecen.";
+  document.getElementById("cmvFoot").innerHTML="Importes en "+MONEDA_NOMBRE[cur]+". Ingresos en positivo y gastos en negativo (como el EERR). Pto = USD \u00d7 TC (manual). "+saldoTxt+" Sumat acum. = saldo anterior + total del per\u00edodo. Columna I = inversi\u00f3n: tild\u00e1 'Excluir del costo' para sacar esas filas (tambi\u00e9n del total). El filtro 'Proy. ejecutados' incluye todo proyecto que se cruce al menos un mes con el rango; los que no tienen fecha cargada siempre aparecen.";
 }
 async function initCMV(){
   await loadProjOv();
@@ -2331,6 +2364,7 @@ async function cargarTodoDesdeSupabase(){
   if(pd){ Object.assign(PROJ_DATA,pd); PROJ_DATA.meses=completarMeses(PROJ_DATA.meses); hubo=true; }
   if(ov){ Object.assign(OVERRIDES,ov); hubo=true; }
   quitarCuentasPtoEliminadas();
+  invalidarSumaApertura();
   if(pov){ PROJ_OV.proj=pov.proj||{}; PROJ_OV.row=pov.row||{}; hubo=true; }
   if(pc){ PROY_CTRL.meses=completarMeses(pc.meses||[]); PROY_CTRL.proyectos=pc.proyectos||{}; hubo=true; }
   if(poc){ Object.assign(PROY_CTRL_OC,poc); hubo=true; }
@@ -2863,6 +2897,7 @@ const APERTURA_DETALLE={}; // cuenta -> [ {mes,fecha,origen,tipoComp,razonSocial
 // el parseo en parseRawLedgerCuentas para como se cruza con APERTURA_DETALLE.
 const APERTURA_AUX2_DETALLE={};
 function mergeAperturaIntoData(resCuentas){
+  invalidarSumaApertura();
   // A diferencia del resto de la app, el detalle de Apertura de Estructura NO respeta HIST_LOCK:
   // es informacion complementaria para mirar de que se compone una cuenta, no toca ninguno de los
   // totales oficiales que el bloqueo protege -- asi que no hace falta desbloquear/re-bloquear para
@@ -3724,7 +3759,72 @@ function migrarPtoEnergiaAux02(){
   ["EDESUR","EPEN"].forEach(k=>{ if(m[k]){ delete m[k]; hubo=true; } });
   return hubo;
 }
-async function saveAperturaPto(){ guardarClave('APERTURA_PTO',APERTURA_PTO); }
+async function saveAperturaPto(){ invalidarSumaApertura(); guardarClave('APERTURA_PTO',APERTURA_PTO); }
+/* 2026-10-16 (a pedido de Micaela): "que este el Alquileres que sumariza el detalle de lo aperturado abajo,
+   yo modifico individualmente, y automaticamente se actualiza la sumatoria de Estructura o Estructura NQN
+   segun corresponda". Cada concepto con Pto de Apertura se asigna a UNA cuenta de Presupuesto (key de
+   CONFIG_PTO = cuenta real + bloque) y el Pto de esa cuenta pasa a ser la suma de sus conceptos (ptoVigente).
+   A que cuenta va cada concepto, en este orden:
+     1) la que se eligio al cargarlo desde Historial (APERTURA_PTO[cuenta][concepto].key);
+     2) "Cta Part Socios": la cuenta "Cta part <socio>" de Estructura (socio = APERTURA_PTO_FILTRO);
+     3) bloque fijo de APERTURA_CONCEPTO_BLOQUE (confirmado con Micaela el 16/10/2026) o, si el concepto es
+        directamente un Grupo ("K) ESTRUCTURA"/"K) ESTRUCTURA NQN", Energía y Food & Bev), ese Grupo;
+     4) el bloque de sus movimientos, si son todos del mismo (grupoDeConceptoApertura).
+   Con el bloque, la cuenta es la cuenta real de esa Apertura en ese bloque -- solo si la Apertura tiene UNA
+   cuenta real (en Rodados, Muebles, etc. hay varias y no se adivina: hace falta el paso 1).
+   Al pasar a suma, los Pto de cuenta que cambian (16/10/2026): Alquileres 11.045.926 -> 11.130.000 y NQN
+   7.279.865 -> 7.050.000; Energía 114.006 -> 100.000 y NQN 565.732 -> 400.000; Movilidad Combustible
+   5.183.754 -> 5.100.000; Cta part 293.539 -> 310.000 por socio. */
+const APERTURA_CONCEPTO_BLOQUE={
+  "Alquileres":{"PRINCI":"K) ESTRUCTURA","BERGER":"K) ESTRUCTURA","Expensas Of. CABA":"K) ESTRUCTURA","SPWORK":"K) ESTRUCTURA NQN"},
+  "Movilidad Combustible":{"Combustible":"K) ESTRUCTURA","Peajes":"K) ESTRUCTURA","Remises":"K) ESTRUCTURA","Estacionamiento":"K) ESTRUCTURA","ContaParam":"K) ESTRUCTURA"}
+};
+let SUMA_APERTURA_CACHE=null;
+function invalidarSumaApertura(){ SUMA_APERTURA_CACHE=null; }
+function keyCuentaDeConcepto(cta,con){
+  const ent=(APERTURA_PTO[cta]||{})[con];
+  if(ent&&ent.key&&CONFIG_PTO.some(c=>c.key===ent.key)) return ent.key;
+  if(cta==="Cta Part Socios"){
+    const socio=(APERTURA_PTO_FILTRO[cta]||{})[con]; if(!socio) return null;
+    const c=CONFIG_PTO.find(x=>x.grupo==="K) ESTRUCTURA"&&normApertura(x.cuenta)===normApertura("Cta part "+socio));
+    return c?c.key:null;
+  }
+  let g=(APERTURA_CONCEPTO_BLOQUE[cta]||{})[con]||null;
+  if(!g&&(con==="K) ESTRUCTURA"||con==="K) ESTRUCTURA NQN")) g=con;
+  if(!g) g=grupoDeConceptoApertura(cta,con);
+  if(!g) return null;
+  const reales=(APERTURA_CUENTAS_MAP[cta]||[cta]);
+  if(reales.length!==1) return null;
+  const c=CONFIG_PTO.find(x=>x.grupo===g&&normApertura(x.cuenta)===normApertura(reales[0]));
+  return c?c.key:null;
+}
+// key de CONFIG_PTO -> [{cta,con}] de los conceptos con Pto que suman en esa cuenta (cacheado; se invalida
+// al guardar APERTURA_PTO, al cargar un crudo y al leer de Supabase).
+function conceptosSumadosDeKey(key){
+  if(!SUMA_APERTURA_CACHE){
+    SUMA_APERTURA_CACHE={};
+    Object.keys(APERTURA_PTO).forEach(cta=>Object.keys(APERTURA_PTO[cta]||{}).forEach(con=>{
+      const h=(APERTURA_PTO[cta][con]||{}).historial; if(!h||!h.length) return;
+      const k=keyCuentaDeConcepto(cta,con); if(!k) return;
+      (SUMA_APERTURA_CACHE[k]=SUMA_APERTURA_CACHE[k]||[]).push({cta,con});
+    }));
+  }
+  return SUMA_APERTURA_CACHE[key]||[];
+}
+// Vigencia "sintetica" de la suma en el mes ym: cada concepto aporta su vigencia de ese mes (si el mes es
+// anterior a su primera vigencia, la primera -- mismo criterio que ptoVigente), reexpresada a pesos del
+// "desde" mas reciente entre ellas, que es el "desde" de la suma (asi USD/AXI siguen tomando esa fecha).
+function ptoVigenteSumaApertura(cs,ym){
+  const vs=cs.map(({cta,con})=>{
+    const h=((APERTURA_PTO[cta]||{})[con]||{}).historial||[]; if(!h.length) return null;
+    const ord=h.slice().sort((a,b)=>a.desde<b.desde?-1:(a.desde>b.desde?1:0));
+    let el=ord[0]; for(const e of ord){ if(e.desde<=ym) el=e; else break; }
+    return el;
+  }).filter(Boolean);
+  if(!vs.length) return null;
+  const D=vs.reduce((m,v)=>v.desde>m?v.desde:m,vs[0].desde);
+  return {desde:D,pto:vs.reduce((t,v)=>t+pesosEnMes(+v.pto||0,v.desde,D),0),suma:true};
+}
 // El "Concepto" que arma CLASIF_APERTURA_FN sale de la Razon Social tal cual figura en el crudo
 // (ej. podria venir "PRINCI SRL" en vez de "PRINCI"). Para no depender de que coincida caracter a
 // caracter con la clave que carguemos en APERTURA_PTO, matchea por igualdad exacta primero y, si no
@@ -4335,7 +4435,7 @@ function renderProy(){
   tabla.innerHTML=head+"<tbody>"+rows+"</tbody>";
 
   document.getElementById("pyKpis").innerHTML=[["Ingresos facturados",ingresosTot],["Gastos totales",gastosTotal],["Resultado",resultado]]
-    .map(c=>`<div class="kpi"><div class="k-lbl">${c[0]}</div><div class="k-val" style="color:${c[1]>=0?"var(--cost)":"var(--income)"}">$ ${fmtM(c[1])}</div></div>`).join("");
+    .map(c=>`<div class="kpi"><div class="k-lbl">${c[0]}</div><div class="k-val" style="color:${c[1]>=0?"var(--cost)":"var(--income)"}">${monedaDe("pyCur").simb} ${fmtM(c[1])}</div><div class="k-sub">en ${monedaDe("pyCur").nombre}</div></div>`).join("");
 
   const ocTot=cods.reduce((s,c)=>s+((PROY_CTRL_OC[c]||{tot:[0,0,0,0]}).tot[0]||0),0);
   const pfArs=cods.reduce((s,c)=>s+((PROY_CTRL_PF[c]||{tot:[0,0,0,0]}).tot[0]||0),0);
