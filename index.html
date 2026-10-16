@@ -802,6 +802,8 @@ async function initPto(){
     }
     saveOverrides();renderPto();});
   document.getElementById("pTabla").addEventListener("click",e=>{
+    const tog=e.target.closest(".pto-det-tog");
+    if(tog){ const k=tog.dataset.c; if(PTO_DET_ABIERTO.has(k)) PTO_DET_ABIERTO.delete(k); else PTO_DET_ABIERTO.add(k); renderPto(); return; }
     const vigLink=e.target.closest(".vig-link");
     if(vigLink){
       showPtoSub("hist");
@@ -1366,7 +1368,11 @@ const ORDEN_CUENTAS_ESTRUCTURA=["Cta part Pedretti Gustavo","Cta part Seoane Lea
   "Honorarios Arquitectos","Honorarios Contables","Honorarios Escribania","Honorarios Legales","Honorarios Otros",
   "Servicios Profesionales","Gs varios oficina","Librería e Imprenta","Mensajeria","Gs limpieza","Patentes",
   "Gastos generales","Gastos Bancarios","Impuestos y Tasas","Impuesto Pais","Int y Rec Impositivos",
-  "Intereses Perdidos","Juicios Perdidos","Gastos Extraordinarios","Ajustes Cuentas Corrientes"];
+  "Intereses Perdidos","Juicios Perdidos","Gastos Extraordinarios","Ajustes Cuentas Corrientes",
+  // Sueldos por sector (bloque Sueldos de Presupuesto), en el orden del informe de Micaela; Produccion al final.
+  "Operarios","Operarios / Limpieza","Técnica","Compras","Ventas","Administracion","Gerencia","Neuquén","Produccion"];
+// Orden de las cuentas dentro de cada sector de Sueldos (detalle expandible de Presupuesto).
+const ORDEN_CUENTAS_SUELDOS=["Sueldos","Contrib Patronales","Indemnizaciones","Comisiones MANDO MEDIOS","Aportes Sindicales","Sueldos no remunerativos","SEGURO DE VIDA","Medicina Laboral Prepaga","ART"];
 function normOrdenCuenta(s){
   return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();
 }
@@ -1787,6 +1793,7 @@ function mesesConFuturo(extra){
 }
 /* ===== Filtro/orden tipo Excel para #pTabla (Cuenta/Responsable/Base) — mismo patron que Compras ===== */
 const PTO_COL_FILTRO={}; let PTO_SORT=null;
+const PTO_DET_ABIERTO=new Set(); // keys de Presupuesto con el detalle por cuenta expandido (sectores de Sueldos)
 function ptoColUnique(rows,col){
   const s=new Set(); let hasEmpty=false;
   rows.forEach(c=>{ const v=col==="responsable"?iniciales(c.responsable):(col==="cuenta"?c.cuenta:(OVERRIDES[c.key]||{}).base); if(v!=null&&v!=="") s.add(String(v)); else hasEmpty=true; });
@@ -1963,9 +1970,14 @@ window.togglePtoDetalle=togglePtoDetalle;
       tAcumMensual+=acumMes;
       acumCell=`<td class="info fzr ${acumMes>0?"over":"under"}">${fmt(acumMes)}</td>`;
     }
+    // 2026-10-16 (a pedido de Micaela): los sectores de Sueldos se expanden en sus cuentas (Sueldos, Contrib
+    // Patronales, ART...) -- c.detalle sale del auxiliar 10 (ver mergePtoRealIntoConfig). Solo real, sin Pto.
+    const detCtas=c.detalle?Object.keys(c.detalle).filter(cta=>meses.some(m=>{const v=(c.detalle[cta][m]||[])[cur];return v&&Math.abs(v)>0.005;})):[];
+    const detAbierto=PTO_DET_ABIERTO.has(c.key);
+    const detTog=detCtas.length?`<span class="pto-det-tog" data-c="${esc(c.key)}" title="${detAbierto?"Contraer":"Expandir"} el detalle por cuenta" style="cursor:pointer;display:inline-block;width:14px;opacity:.7">${detAbierto?"▾":"▸"}</span>`:"";
     const vigLink=`<span class="vig-link" data-c="${esc(c.key)}" title="Ver/editar historial de Pto (Historial de cambios)" style="cursor:pointer;margin-left:5px;opacity:.55">🕘</span>`;
     const filaPrincipal=`<tr>
-      <td class="fz fz1 ell real" title="${esc(c.cuenta)}">${c.cuenta}${vigLink}</td>
+      <td class="fz fz1 ell real" title="${esc(c.cuenta)}">${detTog}${c.cuenta}${vigLink}</td>
       <td class="fz fz2 ell real" title="${esc(c.responsable||"")}">${iniciales(c.responsable)}</td>
       ${pMostrarDetallePto?`<td class="fz fz3 info"><select class="base-sel" data-c="${esc(c.key)}"${editable&&!esSumaAp?"":" disabled"}${esSumaAp?' title="Suma de su apertura: la base se define en cada concepto (Historial de cambios)"':""}><option value="mensual"${base==="mensual"?" selected":""}>M</option><option value="anual"${base==="anual"?" selected":""}>A</option></select></td>
       <td class="fz fz4 info">${conceptosSumadosDeKey(c.key).length?`<span title="Suma de su apertura por concepto: se modifica en Historial de cambios, concepto por concepto" style="display:inline-block;width:100%;text-align:right">Σ ${fmt(ptoShow)}</span>`:`<input class="pto-inp" type="text" inputmode="numeric" data-c="${esc(c.key)}" value="${fmt(ptoShow)}"${editable?"":" disabled"}>`}</td>
@@ -1973,7 +1985,13 @@ window.togglePtoDetalle=togglePtoDetalle;
       <td class="real fzr"><b>${fmt(realPer)}</b></td>
       <td class="info fzr ${desvUlt>0?"over":"under"}">${fmt(desvUlt)}</td>
       ${acumCell}</tr>`;
-    return filaPrincipal;
+    if(!detAbierto||!detCtas.length) return filaPrincipal;
+    const ordD=cta=>{ const i=ORDEN_CUENTAS_SUELDOS.indexOf(cta); return i<0?999:i; };
+    const hijas=detCtas.sort((a,b)=>(ordD(a)-ordD(b))||a.localeCompare(b,'es')).map(cta=>{
+      const vs=meses.map(m=>((c.detalle[cta][m]||[])[cur])||0);
+      return `<tr class="ptodet"><td class="fz fz1 ell" style="padding-left:24px;opacity:.85" title="${esc(cta)}">↳ ${esc(cta)}</td><td class="fz fz2"></td>${pMostrarDetallePto?`<td class="fz fz3 info"></td><td class="fz fz4 info"></td><td class="fz fz5 grp info"></td>`:""}${vs.map(v=>`<td class="mescol" style="opacity:.85">${v?fmt(v):"–"}</td>`).join("")}<td class="real fzr" style="opacity:.85">${fmt(vs.reduce((a,b)=>a+b,0))}</td><td class="info fzr"></td><td class="info fzr"></td></tr>`;
+    }).join("");
+    return filaPrincipal+hijas;
   }).join("");
   const tDesvUlt=tRealUlt-tPtoUlt;
   const totCells=colTot.map(v=>`<td class="mescol"><b>${v?fmt(v):"–"}</b></td>`).join("");
@@ -3018,6 +3036,12 @@ function parseRawLedgerCuentas(rows){
   // Grupo, y es la UNICA forma de lograrlo, esos bienes son de ese Grupo (ver aux2ItemsParaTx). Si no
   // hay forma segura de partirlo, se cae en "(sin Aux 0N)" -- no se arriesga una atribucion incorrecta.
   const aux2Raw={}; const gruposMontosPorClave={};
+  // 2026-10-16 (a pedido de Micaela): Sueldos por sector. El sector (Operarios, Tecnica, Compras...) es el
+  // auxiliar "10 - SUELDOS" (Desc. auxiliar) de cada asiento de sueldos; "Produccion" es la reclasificacion
+  // (negativa) de la mano de obra a produccion. "NO APLICA" se excluye: es la contrapartida de Produccion y el
+  // ajuste por inflacion. Sectores + Produccion = N) SUELDOS del Estado de Resultados (verificado dic-25..ago-26).
+  // sueldosSector: sector -> {mes:[ars,usdOf,usdBi,axi]}; sueldosDet: sector -> cuenta -> {mes:[...]}.
+  const sueldosSector={}, sueldosDet={};
   const tiposAuxBien=new Set(Object.values(APERTURA_TIPO_AUX2)); const sinAsociarAux={}; // cuenta real -> tipo de aux de bien, si no esta en ninguna Apertura
   for(let i=1;i<rows.length;i++){
     const r=rows[i]; if(!r||r.length<10) continue;
@@ -3026,6 +3050,19 @@ function parseRawLedgerCuentas(rows){
     // puntual es un movimiento de Muebles y Utiles). No pasa por GRUPO_MOVIM porque su "Desc.
     // auxiliar" (Generico/No aplica/el bien) no es un codigo de Aux 02 -- se guarda aparte, para
     // cruzarlo despues con su fila "02 - EERR" gemela via claveAux2().
+    if(/^10\s*-/.test(tipoAux)){
+      const sector=S(r[3]), f10=parseFechaCell(r[5]);
+      if(sector&&normApertura(sector)!==normApertura("NO APLICA")&&f10){
+        const y10=f10.getUTCFullYear()+"-"+String(f10.getUTCMonth()+1).padStart(2,"0");
+        const d10=y10+"-"+String(f10.getUTCDate()).padStart(2,"0");
+        const ars10=N(r[12]), tO=tcOficFor(d10,origen,ars10,N(r[15])), tB=tcBillFor(d10,origen,N(r[17]),S(r[7])), fA=axiFactorFor(y10);
+        const v10=[ars10, tO?ars10/tO:0, tB?ars10/tB:0, fA!=null?ars10*fA:0];
+        const sumar=(o,k)=>{ if(!o[k]) o[k]=[0,0,0,0]; for(let j=0;j<4;j++) o[k][j]+=v10[j]; };
+        sumar(sueldosSector[sector]=sueldosSector[sector]||{},y10);
+        const ds=sueldosDet[sector]=sueldosDet[sector]||{}; sumar(ds[cuenta]=ds[cuenta]||{},y10);
+      }
+      continue;
+    }
     if(tipoAux!=="02 - EERR"){
       if(tiposAuxBien.has(tipoAux)&&!APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cuenta)]) sinAsociarAux[cuenta]=tipoAux;
       const cuentaApertura2=APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cuenta)];
@@ -3086,7 +3123,10 @@ function parseRawLedgerCuentas(rows){
     ["K) ESTRUCTURA","K) ESTRUCTURA NQN","M) INVERSIONES"].forEach(g=>{ const ser=cagg[cuenta+"\u241F"+g]; if(ser){ const t=Object.values(ser).reduce((a,v)=>a+v[0],0); if(Math.abs(t)>0.5) imp[g]=Math.round(t); } });
     if(Object.keys(imp).length) sinAsociar.push({cuenta,aux:sinAsociarAux[cuenta],imp});
   });
-  return {cuentas:out, meses:[...mesesSet].sort(), detalle, aux2, sinAsociar}; // cuentas: "cuenta\u241Fgrupo" -> {mes:[ars,usdOfic,usdBill,axi]}
+  const red4=o=>{ const r={}; Object.keys(o).sort().forEach(y=>r[y]=o[y].map(v=>Math.round(v*1e4)/1e4)); return r; };
+  const sueldos={}, sueldosDetalle={};
+  Object.keys(sueldosSector).forEach(sec=>{ sueldos[sec]=red4(sueldosSector[sec]); sueldosDetalle[sec]={}; Object.keys(sueldosDet[sec]).forEach(c=>sueldosDetalle[sec][c]=red4(sueldosDet[sec][c])); });
+  return {cuentas:out, meses:[...mesesSet].sort(), detalle, aux2, sinAsociar, sueldos, sueldosDetalle}; // cuentas: "cuenta\u241Fgrupo" -> {mes:[ars,usdOfic,usdBill,axi]}
 }
 const APERTURA_DETALLE={}; // cuenta -> [ {mes,fecha,origen,tipoComp,razonSocial,comprobante,ars}, ... ]
 // cuenta -> { claveAux2(cuenta,comprobante,fecha) -> {tipoAux,codigo,desc,leyenda,mes} }. Detalle del
@@ -4132,6 +4172,15 @@ function agregarCuentasNuevasAConfigPto(resCuentas){
     if(!OVERRIDES[key]) OVERRIDES[key]={base:"mensual",historial:[{desde:FECHA_BASE_DEFAULT_YM,pto:0}]};
     nuevas.push(cuenta+" ("+(grupo==="K) ESTRUCTURA NQN"?"NQN":"Estructura")+")");
   });
+  // Sectores de Sueldos (auxiliar 10) con movimientos que todavia no estan en Presupuesto (ej. "Produccion").
+  Object.keys(resCuentas.sueldos||{}).sort().forEach(sec=>{
+    if(existentes.has(sec+"\u241FN) SUELDOS")) return;
+    if(!Object.values(resCuentas.sueldos[sec]).some(v=>Math.abs(v[0])>0.005)) return;
+    let key="SUE·"+sec; while(keys.has(key)) key+="*"; keys.add(key);
+    CONFIG_PTO.push({cuenta:sec,grupo:"N) SUELDOS",key,responsable:null,legajo:null,base:"mensual",pto_sugerido:0,real_12m:0,prom_mensual:0,serie:{}});
+    if(!OVERRIDES[key]) OVERRIDES[key]={base:"mensual",historial:[{desde:FECHA_BASE_DEFAULT_YM,pto:0}]};
+    nuevas.push(sec+" (Sueldos)");
+  });
   return nuevas;
 }
 let CUENTAS_NUEVAS_PTO=[];
@@ -4144,13 +4193,25 @@ function mergePtoRealIntoConfig(resCuentas){
   const mesesNuevos=mesesArchivo.filter(m=>!mesBloqueado(m));
   let n=0;
   CONFIG_PTO.forEach(c=>{
-    const nuevo=cuentasAgg[c.cuenta+"\u241F"+c.grupo]||{};
+    // Sueldos: el real de cada fila es su SECTOR (auxiliar 10), no una cuenta contable (ver parseRawLedgerCuentas).
+    const esSueldos=c.grupo==="N) SUELDOS"&&resCuentas.sueldos;
+    const nuevo=esSueldos?(resCuentas.sueldos[c.cuenta]||{}):(cuentasAgg[c.cuenta+"\u241F"+c.grupo]||{});
     const serieBloqueada={};
     Object.keys(c.serie).forEach(m=>{ if(mesBloqueado(m)) serieBloqueada[m]=c.serie[m]; });
     const serieNueva={...serieBloqueada};
     let tocado=false;
     mesesNuevos.forEach(m=>{ serieNueva[m]=nuevo[m]||[0,0,0,0]; tocado=true; });
     c.serie=serieNueva;
+    if(esSueldos){ // detalle por cuenta contable del sector (Sueldos, Contrib Patronales, ART...), mismos meses
+      const det=(resCuentas.sueldosDetalle||{})[c.cuenta]||{}, viejo=c.detalle||{}, nuevoDet={};
+      new Set([...Object.keys(viejo),...Object.keys(det)]).forEach(cta=>{
+        const sv=viejo[cta]||{}, sn=det[cta]||{}, o={};
+        Object.keys(sv).forEach(m=>{ if(mesBloqueado(m)) o[m]=sv[m]; });
+        mesesNuevos.forEach(m=>{ if(sn[m]) o[m]=sn[m]; });
+        if(Object.keys(o).length) nuevoDet[cta]=o;
+      });
+      c.detalle=nuevoDet;
+    }
     if(tocado) n++;
   });
   return n;
