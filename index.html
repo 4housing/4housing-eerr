@@ -3962,13 +3962,17 @@ function conceptosSumadosDeKey(key){
   }
   return SUMA_APERTURA_CACHE[key]||[];
 }
-// Vigencia "sintetica" de la suma en el mes ym: cada concepto aporta su vigencia de ese mes (si el mes es
-// anterior a su primera vigencia, la primera -- mismo criterio que ptoVigente), reexpresada a pesos del
+// Vigencia "sintetica" de la suma en el mes ym: cada concepto aporta su vigencia de ese mes (nada si el mes es
+// anterior a su primera vigencia), reexpresada a pesos del
 // "desde" mas reciente entre ellas, que es el "desde" de la suma (asi USD/AXI siguen tomando esa fecha).
 function ptoVigenteSumaApertura(cs,ym){
   const vs=cs.map(({cta,con})=>{
     const h=((APERTURA_PTO[cta]||{})[con]||{}).historial||[]; if(!h.length) return null;
     const ord=h.slice().sort((a,b)=>a.desde<b.desde?-1:(a.desde>b.desde?1:0));
+    // 2026-10-16 (a pedido de Micaela): un concepto suma recien desde su primera vigencia -- antes, para un mes
+    // anterior se tomaba igual su primera vigencia y, por ejemplo, Gastos de Publicidad de abr-26 sumaba CAISSA y
+    // Tesoreria aunque arrancan en may-26.
+    if(ym<ord[0].desde) return null;
     let el=ord[0]; for(const e of ord){ if(e.desde<=ym) el=e; else break; }
     const f=((APERTURA_PTO[cta]||{})[con]||{}).base==="anual"?1/12:1; // concepto con base anual: 1/12 por mes
     return {desde:el.desde,pto:(+el.pto||0)*f};
