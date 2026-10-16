@@ -2797,6 +2797,21 @@ function tcOficFor(dstr,origen,ars,ext){
   if(LIVE_TC.ofic!=null) return LIVE_TC.ofic;
   return null;
 }
+// Control de cotizaciones absurdas: si la cotizacion propia de un asiento ContaParam/ContaOC es
+// menos de la mitad o mas del doble de la cotizacion billete de la tabla para ese dia (ej. un asiento
+// cargado en Tango con Cotizacion 1), se usa la de la tabla y se registra aca para avisar al cargar
+// el crudo. No aplica a las correcciones manuales (TC_COMPROBANTE_OVERRIDE) ni si no hay dato en la tabla.
+const COTIZ_RANGO_MIN=0.5, COTIZ_RANGO_MAX=2;
+let COTIZ_CORREGIDAS={};
+function cotizAsientoValida(dstr,origen,cotiz,comprobante){
+  const ref=buscarCotizAtras(HIST_CAMBIARIO.bill,dstr);
+  if(ref==null||!(ref>0)) return cotiz;
+  const q=cotiz/ref;
+  if(q>=COTIZ_RANGO_MIN&&q<=COTIZ_RANGO_MAX) return cotiz;
+  const k=(comprobante||"?")+"|"+dstr+"|"+cotiz;
+  if(!COTIZ_CORREGIDAS[k]) COTIZ_CORREGIDAS[k]={comprobante:comprobante||"?",fecha:dstr,origen,cotiz,ref};
+  return ref;
+}
 function tcBillFor(dstr,origen,cotiz,comprobante){
   // ContaParam: primero se busca una correccion manual por Nro. de comprobante (TC_COMPROBANTE_OVERRIDE
   // -- ver mas abajo); si ese comprobante no esta en la tabla, se usa la cotizacion propia del asiento
@@ -2804,9 +2819,9 @@ function tcBillFor(dstr,origen,cotiz,comprobante){
   if(origen==="ContaParam"){
     const ov=comprobante!=null?TC_COMPROBANTE_OVERRIDE[comprobante]:null;
     if(ov!=null) return ov;
-    if(cotiz) return cotiz;
+    if(cotiz) return cotizAsientoValida(dstr,origen,cotiz,comprobante);
   } else if(origen==="ContaOC"&&cotiz){
-    return cotiz;
+    return cotizAsientoValida(dstr,origen,cotiz,comprobante);
   }
   const v=buscarCotizAtras(HIST_CAMBIARIO.bill,dstr); if(v!=null) return v;
   if(LIVE_TC.bill!=null) return LIVE_TC.bill;
@@ -4849,6 +4864,7 @@ async function onCargarInformeCrudo(file){
     const dicOk=await cargarDiccionarioSupabase();
     await cargarClasifProyectosSupabase();
     await fetchLiveTC();
+    COTIZ_CORREGIDAS={};
     const res=parseRawLedgerEERR(rows);
     const mesesConDatos=new Set(); DATA.grupos.forEach(g=>Object.keys(g.serie).forEach(m=>mesesConDatos.add(m))); // los meses rellenados en cero no cuentan
     const mesesActuales=[...mesesConDatos].sort().filter(m=>!mesBloqueado(m));
@@ -4896,6 +4912,12 @@ async function onCargarInformeCrudo(file){
     m2+= dicOk ? ` Diccionario tomado de Supabase: USD Oficial hasta ${HIST_CAMBIARIO.ofic_last||"?"}, USD Billete hasta ${HIST_CAMBIARIO.bill_last||"?"}, FACPCE hasta ${HIST_CAMBIARIO.facpce_last||"?"}.` : " ⚠ No se pudo leer el diccionario de Supabase (revisa conexion o que las tablas usd_diario_oficial/idx_facpce ya existan) — se usó el histórico embebido como respaldo, puede estar desactualizado.";
     if(LIVE_TC.ofic) m2+=` Cotizacion en vivo obtenida de dolarapi.com (${LIVE_TC.fecha||"hoy"}).`; else m2+=" No se pudo conectar a dolarapi.com (revisa conexion) — fechas fuera del historico quedan sin USD/AXI.";
     if(nPend) m2+=` ⚠ ${nPend} filas sin cotizacion completa (fechas sin historico ni dato en vivo) — no se inventaron valores, quedaron en 0 para esas filas.`;
+    const corr=Object.values(COTIZ_CORREGIDAS).sort((a,b)=>a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+    if(corr.length){
+      const fmtC=v=>(+v).toLocaleString("es-AR",{maximumFractionDigits:2});
+      m2+=` ⚠ ${corr.length} asiento(s) con cotización fuera de rango (menos de la mitad o más del doble del USD Billete del día): para el USD Billete se usó la cotización de la tabla. Corregilos en Tango: `+corr.map(c=>`Nº ${c.comprobante} (${c.origen}, ${c.fecha}: vino ${fmtC(c.cotiz)}, tabla ${fmtC(c.ref)})`).join("; ")+".";
+      console.log("Asientos con cotizacion corregida:",corr);
+    }
     if(nIgnor) m2+=` ${nIgnor} filas con grupo no reconocido, ignoradas: ${Object.keys(res.gruposIgnorados).join(", ")}.`;
     m2+=" Presupuesto·Estructura actualizado: "+nCuentas+" cuentas.";
     if(resCuentas.sinAsociar&&resCuentas.sinAsociar.length) m2+=` ⚠ ${resCuentas.sinAsociar.length} cuenta(s) con auxiliar de bien sin asociar a ninguna Apertura (y con importes en Estructura/Inversión, que no se ven): ${resCuentas.sinAsociar.map(x=>x.cuenta+" ["+x.aux.slice(0,2)+"]").join(", ")}.`;
