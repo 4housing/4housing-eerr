@@ -857,6 +857,17 @@ function initPtoHist(){
   });
   // Edicion en la tabla: cambiar el Pto de una fila (Enter o al salir del campo).
   document.getElementById("phTabla").addEventListener("change",e=>{
+    const asel=e.target.closest(".ph-asig-sel");
+    if(asel){
+      if(!editable||!asel.value){ renderPtoHist(); return; }
+      const ent=((APERTURA_PTO[asel.dataset.cta]||{})[asel.dataset.con]);
+      if(!conceptosSumadosDeKey(asel.value).length){
+        const v=ptoVigente(asel.value,fechaBasePto());
+        if(v&&v.pto&&!confirm(`"${cuentaNombrePorKey(asel.value)}" (${PH_BLOQUE_LBL[(CONFIG_PTO.find(c=>c.key===asel.value)||{}).grupo]||""}) va a pasar a ser la SUMA de su apertura por concepto.\nEl Pto que hoy tiene cargado a nivel cuenta (${fmt(v.pto)}) deja de usarse (queda guardado).\n¿Seguir?`)){ renderPtoHist(); return; }
+      }
+      if(ent){ ent.key=asel.value; saveAperturaPto(); renderPto(); renderPtoApertura(); }
+      renderPtoHist(); return;
+    }
     const bsel=e.target.closest(".ph-base-sel");
     if(bsel){
       if(!editable){ renderPtoHist(); return; }
@@ -1060,45 +1071,84 @@ function renderPtoHist(){
     if(cs.length){
       // Cuenta = suma de su apertura: una fila por cada fecha en que cambia algun concepto, con la suma.
       const ds=[...new Set(cs.flatMap(({cta,con})=>(((APERTURA_PTO[cta]||{})[con]||{}).historial||[]).map(e=>e.desde)))].sort();
-      ds.forEach(d=>{ const v=ptoVigente(key,d); filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,
+      ds.forEach(d=>{ const v=ptoVigente(key,d); filas.push({key,parent:key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,
         pos:c?posOrdenCuenta(c.cuenta):Infinity,desde:d,pto:v?v.pto:0,suma:true}); });
       return;
     }
-    h.forEach(e=>filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,
+    h.forEach(e=>filas.push({key,parent:key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,
       pos:c?posOrdenCuenta(c.cuenta):Infinity,desde:e.desde,pto:e.pto}));
   });
-  // Pto por concepto de Apertura (ej. Alquileres · PRINCI): se muestran debajo de la cuenta, con el bloque
-  // al que pertenecen sus movimientos (BERGER/PRINCI = Estructura, SPWORK = Estructura NQN). Si el concepto
-  // no tiene movimientos o tiene de los dos bloques, el bloque dice "Apertura".
+  // Pto por concepto de Apertura (ej. Alquileres · PRINCI): cada concepto va SIEMPRE debajo de la cuenta en
+  // que suma (keyCuentaDeConcepto), con el bloque de esa cuenta (BERGER/PRINCI = Estructura, SPWORK = NQN,
+  // cada Autonomos = la Cta part de su socio). 2026-10-16: antes el bloque salia de los movimientos y los que
+  // no tenian un bloque claro quedaban "colgados" abajo de todo como "Apertura". Si un concepto no tiene cuenta
+  // asignada, se muestra debajo de la primera cuenta posible con "Sin bloque" y un selector para asignarlo.
   const cuentaFiltro=filtroCuenta?cuentaAperturaDeReal(filtroCuenta):"";
   Object.keys(APERTURA_PTO).forEach(cuenta=>{
     if(filtroCuenta&&cuenta!==cuentaFiltro) return;
+    const reales=(APERTURA_CUENTAS_MAP[cuenta]||[cuenta]).map(normApertura);
+    const candidatos=CONFIG_PTO.filter(c=>reales.includes(normApertura(c.cuenta))&&(c.grupo==="K) ESTRUCTURA"||c.grupo==="K) ESTRUCTURA NQN"))
+      .sort((a,b)=>(a.grupo===b.grupo?posOrdenCuenta(a.cuenta)-posOrdenCuenta(b.cuenta):(a.grupo==="K) ESTRUCTURA"?-1:1)));
     Object.keys(APERTURA_PTO[cuenta]).forEach(concepto=>{
       const h=APERTURA_PTO[cuenta][concepto].historial||[];
-      const g=grupoDeConceptoApertura(cuenta,concepto);
-      const bloque=g?(PH_BLOQUE_LBL[g]||g):"Apertura";
-      h.forEach(e=>filas.push({key:null,cuenta,concepto,responsable:"",bloque,pos:posOrdenCuentaApertura(cuenta),desde:e.desde,pto:e.pto}));
+      let parent=keyCuentaDeConcepto(cuenta,concepto), sinAsignar=false;
+      if(!parent){ sinAsignar=true; parent=candidatos.length?candidatos[0].key:null; }
+      const pc=parent?cuentasPorKey[parent]:null;
+      const bloque=sinAsignar?"Sin bloque":(pc?(PH_BLOQUE_LBL[pc.grupo]||pc.grupo):"Apertura");
+      h.forEach(e=>filas.push({key:null,parent,cuenta,concepto,responsable:"",bloque,sinAsignar,candidatos:candidatos.map(c=>c.key),
+        pos:pc?posOrdenCuenta(pc.cuenta):posOrdenCuentaApertura(cuenta),desde:e.desde,pto:e.pto}));
     });
   });
   window.PH_FILAS_TODAS=filas;
   filas=filas.filter(phRowPass);
   const ordBloque=b=>{ const i=PH_BLOQUE_ORD.indexOf(b); return i<0?99:i; };
-  filas.sort((a,b)=>{
-    if(PH_SORT){
-      const d=PH_SORT.dir, c=PH_SORT.col;
-      if(c==="pto") return ((+a.pto||0)-(+b.pto||0))*d;
-      if(c==="desde") return (a.desde<b.desde?-1:(a.desde>b.desde?1:0))*d;
-      if(c==="bloque") return (ordBloque(a.bloque)-ordBloque(b.bloque))*d;
-      return String(phValorCol(a,c)).localeCompare(String(phValorCol(b,c)),'es',{numeric:true})*d;
-    }
-    // por defecto: bloque, orden fijo de cuentas, la cuenta antes que sus conceptos, concepto y fecha
-    if(ordBloque(a.bloque)!==ordBloque(b.bloque)) return ordBloque(a.bloque)-ordBloque(b.bloque);
-    if(a.pos!==b.pos) return a.pos<b.pos?-1:1;
-    if(a.cuenta!==b.cuenta) return a.cuenta.localeCompare(b.cuenta,'es');
-    if(!!a.concepto!==!!b.concepto) return a.concepto?1:-1;
-    if(a.concepto!==b.concepto) return a.concepto.localeCompare(b.concepto,'es');
-    return a.desde<b.desde?-1:(a.desde>b.desde?1:0);
+  // 2026-10-16 (a pedido de Micaela): el detalle siempre sigue a su cuenta principal. Se arman grupos (la
+  // cuenta + los conceptos de su apertura) y se ordenan los GRUPOS: por defecto bloque y el orden fijo de
+  // cuentas (el mismo del detalle de gastos de Presupuesto); al ordenar por una columna, por el valor de la
+  // cuenta principal. Dentro del grupo: la cuenta (por fecha) y debajo sus conceptos, en el orden de la
+  // Apertura (APERTURA_ORDEN) y por fecha.
+  const gruposH=new Map();
+  filas.forEach(f=>{
+    const id=f.parent||("·"+f.cuenta+"·"+f.concepto);
+    if(!gruposH.has(id)) gruposH.set(id,{id,cab:[],hijos:[]});
+    (f.concepto?gruposH.get(id).hijos:gruposH.get(id).cab).push(f);
   });
+  const repG=g=>g.cab[0]||g.hijos[0];
+  const bloqueG=g=>{ const pc=g.id&&cuentasPorKey[g.id]; return pc?(PH_BLOQUE_LBL[pc.grupo]||pc.grupo):repG(g).bloque; };
+  const nombreG=g=>{ const pc=cuentasPorKey[g.id]; return pc?pc.cuenta:repG(g).cuenta; };
+  const posG=g=>{ const pc=cuentasPorKey[g.id]; return pc?posOrdenCuenta(pc.cuenta):repG(g).pos; };
+  const cmpDefecto=(a,b)=>{
+    const ba=ordBloque(bloqueG(a)), bb=ordBloque(bloqueG(b)); if(ba!==bb) return ba-bb;
+    const pa=posG(a), pb=posG(b); if(pa!==pb) return pa<pb?-1:1;
+    return nombreG(a).localeCompare(nombreG(b),'es');
+  };
+  const listaG=[...gruposH.values()].sort((a,b)=>{
+    if(PH_SORT){
+      const d=PH_SORT.dir, c=PH_SORT.col, ra=repG(a), rb=repG(b); let r=0;
+      if(c==="pto") r=((+ra.pto||0)-(+rb.pto||0));
+      else if(c==="desde") r=(ra.desde<rb.desde?-1:(ra.desde>rb.desde?1:0));
+      else if(c==="bloque") r=ordBloque(bloqueG(a))-ordBloque(bloqueG(b));
+      else if(c==="cuenta") r=nombreG(a).localeCompare(nombreG(b),'es',{numeric:true});
+      else r=String(phValorCol(ra,c)).localeCompare(String(phValorCol(rb,c)),'es',{numeric:true});
+      return r*d||cmpDefecto(a,b);
+    }
+    return cmpDefecto(a,b);
+  });
+  const ordConcepto=f=>{ const o=APERTURA_ORDEN[f.cuenta]||[]; const i=o.indexOf(f.concepto); return i<0?9999:i; };
+  filas=[];
+  listaG.forEach(g=>{
+    g.cab.sort((a,b)=>a.desde<b.desde?-1:(a.desde>b.desde?1:0));
+    g.hijos.sort((a,b)=>(ordConcepto(a)-ordConcepto(b))||a.concepto.localeCompare(b.concepto,'es')||(a.desde<b.desde?-1:(a.desde>b.desde?1:0)));
+    filas.push(...g.cab,...g.hijos);
+  });
+  // Boton para volver al orden por defecto (y sacar los filtros de columna), visible solo si hay alguno.
+  { const ln=document.getElementById("phLockNote");
+    let rb=document.getElementById("phOrdenReset");
+    if(!rb&&ln){ rb=document.createElement("button"); rb.id="phOrdenReset"; rb.className="btn"; rb.style.cssText="padding:4px 10px;font-size:11px;margin-left:8px";
+      rb.textContent="↺ Orden por defecto"; rb.title="Vuelve al orden de cuentas de Presupuesto y saca los filtros de columna";
+      rb.onclick=()=>{ PH_SORT=null; Object.keys(PH_COL_FILTRO).forEach(k=>delete PH_COL_FILTRO[k]); renderPtoHist(); };
+      ln.parentNode.insertBefore(rb,ln.nextSibling); }
+    if(rb) rb.style.display=(PH_SORT||Object.keys(PH_COL_FILTRO).length)?"":"none"; }
   const q=x=>esc(x||"").replace(/'/g,"\\'");
   const bs='class="btn" style="padding:3px 8px;font-size:11px"';
   const rowsHtml=filas.map(f=>{
@@ -1120,7 +1170,7 @@ function renderPtoHist(){
       ?`<span style="padding-left:16px" class="mut">↳ apertura:</span> ${esc(f.concepto)}`
       :`<b>${esc(f.cuenta)}</b>${f.suma?' <span class="mut" style="font-size:10px">= suma de la apertura</span>':""}`;
     return `<tr>
-      <td class="ell mut" style="text-align:left" title="${esc(f.bloque)}">${esc(f.bloque)}</td>
+      <td class="ell mut" style="text-align:left" title="${esc(f.bloque)}">${f.sinAsignar&&editable&&f.candidatos.length?`<select class="ph-asig-sel" data-cta="${esc(f.cuenta)}" data-con="${esc(f.concepto)}" title="Este concepto no tiene bloque: elegí a qué cuenta suma" style="font-size:11px;padding:2px 4px;color:#b54"><option value="">Sin bloque…</option>${f.candidatos.map(k=>`<option value="${esc(k)}">${esc(PH_BLOQUE_LBL[(cuentasPorKey[k]||{}).grupo]||k)}${(APERTURA_CUENTAS_MAP[f.cuenta]||[]).length>1?" · "+esc((cuentasPorKey[k]||{}).cuenta||""):""}</option>`).join("")}</select>`:esc(f.bloque)}</td>
       <td class="ell" style="text-align:left" title="${esc(f.cuenta)}${f.concepto?" · "+esc(f.concepto):""}">${cuentaCell}</td>
       <td class="mut" style="text-align:center">${esc(iniciales(f.responsable))}</td>
       <td style="text-align:center">${esc(mesLabel(f.desde))}</td>
