@@ -1445,7 +1445,7 @@ function monedaTxApertura(t,cur){
   const fechaRef=t.fecha||(t.mes+"-28");
   if(cur===1){
     if(t.usdOf!=null) return t.usdOf;
-    const tc=tcOficFor(fechaRef,t.origen,t.ars,0); return tc?t.ars/tc:0;
+    const tc=tcOficFor(fechaRef,t.origen,t.ars,0,t.comprobante||null); return tc?t.ars/tc:0;
   }
   if(cur===2){
     if(t.usdBi!=null) return t.usdBi;
@@ -2791,22 +2791,50 @@ function buscarCotizAtras(mapa,dstr,maxDias){
   }
   return null;
 }
-function tcOficFor(dstr,origen,ars,ext){
+// Asientos sin equivalente en USD (oficial ni billete): quedan solo en pesos (y AXI). Clave
+// "Origen|Nro comprobante|AAAA-MM". Devolver Infinity como TC hace que ars/tc = 0 en todos los usos.
+const ASIENTOS_SIN_USD={
+  "ContaOC|635|2026-09":"Ajuste dif. de cambio sep 2026"
+};
+function asientoSinUsd(origen,comprobante,dstr){
+  if(comprobante==null||comprobante===""||!dstr) return false;
+  return ASIENTOS_SIN_USD.hasOwnProperty(origen+"|"+String(comprobante).trim()+"|"+String(dstr).slice(0,7));
+}
+function tcOficFor(dstr,origen,ars,ext,comprobante){
+  if(asientoSinUsd(origen,comprobante,dstr)) return Infinity;
   if(origen==="Ventas"&&ext) return ars/ext;
   const v=buscarCotizAtras(HIST_CAMBIARIO.ofic,dstr); if(v!=null) return v;
   if(LIVE_TC.ofic!=null) return LIVE_TC.ofic;
   return null;
 }
+// Control de cotizaciones absurdas: si la cotizacion propia de un asiento ContaParam/ContaOC es
+// menos de la mitad o mas del doble de la cotizacion billete de la tabla para ese dia (ej. un asiento
+// cargado en Tango con Cotizacion 1), se usa la de la tabla y se registra aca para avisar al cargar
+// el crudo. Si la fecha no esta en la tabla, se compara contra el billete en vivo. No aplica a las
+// correcciones manuales (TC_COMPROBANTE_OVERRIDE) ni si no hay ninguna referencia.
+const COTIZ_RANGO_MIN=0.5, COTIZ_RANGO_MAX=2;
+let COTIZ_CORREGIDAS={};
+function cotizAsientoValida(dstr,origen,cotiz,comprobante){
+  let ref=buscarCotizAtras(HIST_CAMBIARIO.bill,dstr);
+  if(ref==null) ref=LIVE_TC.bill; // fecha todavia sin dato en la tabla: se controla contra el billete del dia
+  if(ref==null||!(ref>0)) return cotiz;
+  const q=cotiz/ref;
+  if(q>=COTIZ_RANGO_MIN&&q<=COTIZ_RANGO_MAX) return cotiz;
+  const k=(comprobante||"?")+"|"+dstr+"|"+cotiz;
+  if(!COTIZ_CORREGIDAS[k]) COTIZ_CORREGIDAS[k]={comprobante:comprobante||"?",fecha:dstr,origen,cotiz,ref};
+  return ref;
+}
 function tcBillFor(dstr,origen,cotiz,comprobante){
+  if(asientoSinUsd(origen,comprobante,dstr)) return Infinity;
   // ContaParam: primero se busca una correccion manual por Nro. de comprobante (TC_COMPROBANTE_OVERRIDE
   // -- ver mas abajo); si ese comprobante no esta en la tabla, se usa la cotizacion propia del asiento
   // (cotiz/NA2) como siempre. Mismo criterio que la formula de Excel de Micaela.
   if(origen==="ContaParam"){
     const ov=comprobante!=null?TC_COMPROBANTE_OVERRIDE[comprobante]:null;
     if(ov!=null) return ov;
-    if(cotiz) return cotiz;
+    if(cotiz) return cotizAsientoValida(dstr,origen,cotiz,comprobante);
   } else if(origen==="ContaOC"&&cotiz){
-    return cotiz;
+    return cotizAsientoValida(dstr,origen,cotiz,comprobante);
   }
   const v=buscarCotizAtras(HIST_CAMBIARIO.bill,dstr); if(v!=null) return v;
   if(LIVE_TC.bill!=null) return LIVE_TC.bill;
@@ -2845,7 +2873,7 @@ function parseRawLedgerEERR(rows){
     const y=fecha.getUTCFullYear()+"-"+String(fecha.getUTCMonth()+1).padStart(2,"0");
     const dstr=fecha.getUTCFullYear()+"-"+String(fecha.getUTCMonth()+1).padStart(2,"0")+"-"+String(fecha.getUTCDate()).padStart(2,"0");
     const ars=N(r[12]), ext=N(r[15]), cotiz=N(r[17]), comprobante=S(r[7]);
-    const tcOfic=tcOficFor(dstr,origen,ars,ext), tcBill=tcBillFor(dstr,origen,cotiz,comprobante), axiF=axiFactorFor(y);
+    const tcOfic=tcOficFor(dstr,origen,ars,ext,comprobante), tcBill=tcBillFor(dstr,origen,cotiz,comprobante), axiF=axiFactorFor(y);
     const usdOfic=tcOfic?ars/tcOfic:null, usdBill=tcBill?ars/tcBill:null, axi=axiF!=null?ars*axiF:null;
     if(usdOfic==null||usdBill==null||axi==null){
       sinCotiz.push({fila:i+1,fecha:dstr,motivo:[usdOfic==null&&"TC Ofic",usdBill==null&&"TC Bill",axiF==null&&"AXI"].filter(Boolean).join(", ")});
@@ -3067,7 +3095,7 @@ function parseRawLedgerCuentas(rows){
       if(sector&&normApertura(sector)!==normApertura("NO APLICA")&&f10){
         const y10=f10.getUTCFullYear()+"-"+String(f10.getUTCMonth()+1).padStart(2,"0");
         const d10=y10+"-"+String(f10.getUTCDate()).padStart(2,"0");
-        const ars10=N(r[12]), tO=tcOficFor(d10,origen,ars10,N(r[15])), tB=tcBillFor(d10,origen,N(r[17]),S(r[7])), fA=axiFactorFor(y10);
+        const ars10=N(r[12]), tO=tcOficFor(d10,origen,ars10,N(r[15]),S(r[7])), tB=tcBillFor(d10,origen,N(r[17]),S(r[7])), fA=axiFactorFor(y10);
         const v10=[ars10, tO?ars10/tO:0, tB?ars10/tB:0, fA!=null?ars10*fA:0];
         const sumar=(o,k)=>{ if(!o[k]) o[k]=[0,0,0,0]; for(let j=0;j<4;j++) o[k][j]+=v10[j]; };
         sumar(sueldosSector[sector]=sueldosSector[sector]||{},y10);
@@ -3099,7 +3127,7 @@ function parseRawLedgerCuentas(rows){
     mesesSet.add(y);
     const dstr=y+"-"+String(fecha.getUTCDate()).padStart(2,"0");
     const ars=N(r[12]), ext=N(r[15]), cotiz=N(r[17]), comprobante=S(r[7]);
-    const tcOfic=tcOficFor(dstr,origen,ars,ext), tcBill=tcBillFor(dstr,origen,cotiz,comprobante), axiF=axiFactorFor(y);
+    const tcOfic=tcOficFor(dstr,origen,ars,ext,comprobante), tcBill=tcBillFor(dstr,origen,cotiz,comprobante), axiF=axiFactorFor(y);
     const usdOfic=tcOfic?ars/tcOfic:0, usdBill=tcBill?ars/tcBill:0, axi=axiF!=null?ars*axiF:0;
     const k=cuenta+"\u241F"+grupo;
     if(!cagg[k]) cagg[k]={};
@@ -4264,7 +4292,7 @@ function parseRawLedgerProyectos(rows){
     const y=fecha.getUTCFullYear()+"-"+String(fecha.getUTCMonth()+1).padStart(2,"0");
     const dstr=y+"-"+String(fecha.getUTCDate()).padStart(2,"0");
     const ars=N(r[12]), ext=N(r[15]), cotiz=N(r[17]), comprobante=S(r[7]);
-    const tcOfic=tcOficFor(dstr,origen,ars,ext), tcBill=tcBillFor(dstr,origen,cotiz,comprobante), axiF=axiFactorFor(y);
+    const tcOfic=tcOficFor(dstr,origen,ars,ext,comprobante), tcBill=tcBillFor(dstr,origen,cotiz,comprobante), axiF=axiFactorFor(y);
     const usdOfic=tcOfic?ars/tcOfic:0, usdBill=tcBill?ars/tcBill:0, axi=axiF!=null?ars*axiF:0;
     if(!pagg[cod]) pagg[cod]={desc:desc,cats:{},comprasProv:{},comprasDet:{}};
     if(desc && desc.length>(pagg[cod].desc||"").length) pagg[cod].desc=desc;
@@ -4443,7 +4471,7 @@ function parseRawLedgerCMV(rows){
     const key=S(r[6])+"␟"+comprobante;
     const clasifs=comp02[key]||new Set();
     if(incluidas.has(i)){
-      const tcOfic=tcOficFor(dstr,origen,ars,ext), tcBill=tcBillFor(dstr,origen,cotiz,comprobante);
+      const tcOfic=tcOficFor(dstr,origen,ars,ext,comprobante), tcBill=tcBillFor(dstr,origen,cotiz,comprobante);
       const usdOfic=tcOfic?ars/tcOfic:0, usdBill=tcBill?ars/tcBill:0;
       if(!agg[cod]) agg[cod]={desc,movs:{}};
       if(desc && desc.length>(agg[cod].desc||"").length) agg[cod].desc=desc;
@@ -4849,6 +4877,7 @@ async function onCargarInformeCrudo(file){
     const dicOk=await cargarDiccionarioSupabase();
     await cargarClasifProyectosSupabase();
     await fetchLiveTC();
+    COTIZ_CORREGIDAS={};
     const res=parseRawLedgerEERR(rows);
     const mesesConDatos=new Set(); DATA.grupos.forEach(g=>Object.keys(g.serie).forEach(m=>mesesConDatos.add(m))); // los meses rellenados en cero no cuentan
     const mesesActuales=[...mesesConDatos].sort().filter(m=>!mesBloqueado(m));
@@ -4896,6 +4925,12 @@ async function onCargarInformeCrudo(file){
     m2+= dicOk ? ` Diccionario tomado de Supabase: USD Oficial hasta ${HIST_CAMBIARIO.ofic_last||"?"}, USD Billete hasta ${HIST_CAMBIARIO.bill_last||"?"}, FACPCE hasta ${HIST_CAMBIARIO.facpce_last||"?"}.` : " ⚠ No se pudo leer el diccionario de Supabase (revisa conexion o que las tablas usd_diario_oficial/idx_facpce ya existan) — se usó el histórico embebido como respaldo, puede estar desactualizado.";
     if(LIVE_TC.ofic) m2+=` Cotizacion en vivo obtenida de dolarapi.com (${LIVE_TC.fecha||"hoy"}).`; else m2+=" No se pudo conectar a dolarapi.com (revisa conexion) — fechas fuera del historico quedan sin USD/AXI.";
     if(nPend) m2+=` ⚠ ${nPend} filas sin cotizacion completa (fechas sin historico ni dato en vivo) — no se inventaron valores, quedaron en 0 para esas filas.`;
+    const corr=Object.values(COTIZ_CORREGIDAS).sort((a,b)=>a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+    if(corr.length){
+      const fmtC=v=>(+v).toLocaleString("es-AR",{maximumFractionDigits:2});
+      m2+=` ⚠ ${corr.length} asiento(s) con cotización fuera de rango (menos de la mitad o más del doble del USD Billete del día): para el USD Billete se usó la cotización de la tabla. Corregilos en Tango: `+corr.map(c=>`Nº ${c.comprobante} (${c.origen}, ${c.fecha}: vino ${fmtC(c.cotiz)}, tabla ${fmtC(c.ref)})`).join("; ")+".";
+      console.log("Asientos con cotizacion corregida:",corr);
+    }
     if(nIgnor) m2+=` ${nIgnor} filas con grupo no reconocido, ignoradas: ${Object.keys(res.gruposIgnorados).join(", ")}.`;
     m2+=" Presupuesto·Estructura actualizado: "+nCuentas+" cuentas.";
     if(resCuentas.sinAsociar&&resCuentas.sinAsociar.length) m2+=` ⚠ ${resCuentas.sinAsociar.length} cuenta(s) con auxiliar de bien sin asociar a ninguna Apertura (y con importes en Estructura/Inversión, que no se ven): ${resCuentas.sinAsociar.map(x=>x.cuenta+" ["+x.aux.slice(0,2)+"]").join(", ")}.`;
