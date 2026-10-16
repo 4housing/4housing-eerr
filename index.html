@@ -321,13 +321,13 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
     <div class="controls">
       <div class="ctl"><label for="phCuenta">Cuenta</label><select id="phCuenta"></select></div>
       <div class="ctl" id="phConceptoWrap" style="display:none"><label for="phConcepto">Concepto</label><select id="phConcepto"></select></div>
-      <div class="ctl"><label for="phMes">Desde</label><select id="phMes"></select></div>
-      <div class="ctl"><label for="phPto">Nuevo Pto ($, en pesos de ese mes)</label><input id="phPto" type="text" inputmode="numeric" placeholder="0" style="width:150px"></div>
-      <div class="ctl"><label>&nbsp;</label><button class="btn" id="phAddBtn">Agregar vigencia</button></div>
+      <div class="ctl"><label for="phMes">Desde (fecha base)</label><select id="phMes" disabled></select></div>
+      <div class="ctl"><label for="phPto">Pto ($, en pesos de la fecha base)</label><input id="phPto" type="text" inputmode="numeric" placeholder="0" style="width:150px"></div>
+      <div class="ctl"><label>&nbsp;</label><button class="btn" id="phAddBtn">Guardar Pto</button></div>
       <span class="note" id="phLockNote"></span>
     </div>
-    <div class="table-wrap"><table id="phTabla"></table></div>
-    <div class="foot" id="phFoot">Cada cambio de Presupuesto queda acá, con la fecha desde la que aplica — nada se sobreescribe. El bloqueo de edición es el mismo que en Presupuesto·Estructura.</div>
+    <div class="table-wrap"><table id="phTabla" class="grid" style="table-layout:fixed;width:auto"></table></div>
+    <div class="foot" id="phFoot">Todo el Pto vale desde la fecha base (abr-26). Si lo cambiás acá o en Presupuesto·Estructura, se reemplaza ese valor: no se agregan vigencias de otros meses. Las columnas se filtran (▼, con buscador), se ordenan (clic en el título) y se ajustan arrastrando el borde del título. El bloqueo de edición es el mismo que en Presupuesto·Estructura.</div>
   </div>
 </div>
 <div id="view-cmv" style="display:none">
@@ -689,13 +689,50 @@ function migrarOverrides(){
   });
   return hubo;
 }
+/* 2026-10-16 (a pedido de Micaela): "no debiera haber otros meses que no sean Abril". Todo el Pto
+   (por cuenta en OVERRIDES y por concepto en APERTURA_PTO) tiene UNA sola vigencia, desde la fecha base
+   de Config Pto (abr-26); si se cambia, se reemplaza ese valor (agregarVigencia/agregarVigenciaApertura
+   ya reemplazan cuando el "desde" coincide, y el formulario de Historial ahora solo ofrece la fecha
+   base). Esta normalizacion corre al cargar y es idempotente: si un historial tiene otras fechas, se
+   queda con el valor de la fecha base; si no tiene ninguno en la fecha base, toma el que regia en ese
+   mes (o el primero posterior) reexpresado a pesos de la fecha base. Caso real al 16/10/2026: el unico
+   historial con otra fecha era Alquileres · PRINCI (9.000.000 desde abr-26 y 0 desde jul-26) -> queda
+   9.000.000 desde abr-26. */
+function fechaBasePto(){ return (OVERRIDES.__cfg__&&OVERRIDES.__cfg__.fechaBase)||FECHA_BASE_DEFAULT_YM; }
+function colapsarHistorialAFechaBase(h,fb){
+  if(!Array.isArray(h)||!h.length) return false;
+  if(h.length===1&&h[0].desde===fb) return false;
+  const ord=h.slice().sort((a,b)=>a.desde<b.desde?-1:(a.desde>b.desde?1:0));
+  const enBase=ord.filter(e=>e.desde===fb).pop();
+  let pto;
+  if(enBase) pto=enBase.pto;
+  else{
+    const ref=ord.filter(e=>e.desde<=fb).pop()||ord[0];
+    pto=pesosEnMes(ref.pto,ref.desde,fb);
+  }
+  h.splice(0,h.length,{desde:fb,pto});
+  return true;
+}
+function normalizarVigenciasOverrides(){
+  const fb=fechaBasePto(); let hubo=false;
+  Object.keys(OVERRIDES).forEach(k=>{ if(k!=="__cfg__"&&OVERRIDES[k]&&colapsarHistorialAFechaBase(OVERRIDES[k].historial,fb)) hubo=true; });
+  return hubo;
+}
+function normalizarVigenciasApertura(){
+  const fb=fechaBasePto(); let hubo=false;
+  Object.keys(APERTURA_PTO).forEach(cta=>Object.keys(APERTURA_PTO[cta]||{}).forEach(con=>{
+    if(colapsarHistorialAFechaBase((APERTURA_PTO[cta][con]||{}).historial,fb)) hubo=true;
+  }));
+  return hubo;
+}
 async function loadOverrides(){
   // OJO: antes esta linea pisaba SIEMPRE cada cuenta con el default de CONFIG_PTO, incluso cuando
   // ya habia overrides reales cargados desde Supabase un momento antes (bug: cualquier Pto editado
   // a mano se perdia en cada recarga de la app). Ahora solo pone el default si todavia no hay nada.
   CONFIG_PTO.forEach(c=>{ if(!OVERRIDES[c.key]) OVERRIDES[c.key]={base:c.base,historial:[{desde:FECHA_BASE_DEFAULT_YM,pto:c.pto_sugerido}]}; });
   try{const r=await window.storage.get("pto_estructura_overrides_v2");if(r&&r.value)Object.assign(OVERRIDES,JSON.parse(r.value));}catch(e){}
-  if(migrarOverrides()) saveOverrides();
+  const migro=migrarOverrides(), normalizo=normalizarVigenciasOverrides();
+  if(migro||normalizo) saveOverrides();
 }
 async function saveOverrides(){try{await window.storage.set("pto_estructura_overrides_v2",JSON.stringify(OVERRIDES));}catch(e){} guardarClave('OVERRIDES',OVERRIDES);}
 function agregarVigencia(key,desde,pto){
@@ -774,7 +811,7 @@ function initPtoHist(){
   sel.innerHTML="";sel.add(new Option("Todas las cuentas",""));
   CONFIG_PTO.slice().sort((a,b)=>a.cuenta<b.cuenta?-1:1).forEach(c=>sel.add(new Option(c.cuenta,c.key)));
   const mesSel=document.getElementById("phMes");
-  mesSel.innerHTML="";mesesConFuturo(12).forEach(m=>mesSel.add(new Option(mesLabel(m),m)));
+  actualizarMesHist();
   // Si la cuenta elegida tiene Apertura de Estructura (ej. Alquileres), se puede elegir ademas un
   // Concepto puntual (ej. PRINCI) para darle su propia vigencia, en vez de la de toda la cuenta.
   const conceptoWrap=document.getElementById("phConceptoWrap"), conceptoSel=document.getElementById("phConcepto");
@@ -792,7 +829,7 @@ function initPtoHist(){
   document.getElementById("phAddBtn").addEventListener("click",()=>{
     if(!editable){alert('Desbloqueá la edición en Presupuesto·Estructura primero (botón "Desbloquear (Gerencia)").');return;}
     const key=sel.value; if(!key){alert("Elegí una cuenta.");return;}
-    const desde=mesSel.value;
+    const desde=fechaBasePto();
     const ptoInp=document.getElementById("phPto");
     const pto=parseFloat(String(ptoInp.value).replace(/\./g,"").replace(/,/g,"."))||0;
     const concepto=conceptoSel.value;
@@ -802,6 +839,14 @@ function initPtoHist(){
     renderPtoHist();
     if(concepto) renderPtoApertura();
   });
+}
+// El "Desde" del formulario de Historial es siempre la fecha base de Config Pto (ver
+// normalizarVigenciasOverrides): se refresca en cada render por si se cambio la fecha base.
+function actualizarMesHist(){
+  const mesSel=document.getElementById("phMes"); if(!mesSel) return;
+  const fb=fechaBasePto();
+  if(mesSel.value===fb&&mesSel.options.length===1) return;
+  mesSel.innerHTML=""; mesSel.add(new Option(mesLabel(fb),fb)); mesSel.value=fb;
 }
 function cuentaNombrePorKey(key){ const c=CONFIG_PTO.find(x=>x.key===key); return c?c.cuenta:key; }
 // Los "Concepto" de una cuenta con Apertura de Estructura: los que ya tienen transacciones
@@ -823,8 +868,72 @@ function eliminarVigenciaApertura(cuenta,concepto,desde){
   saveAperturaPto();renderPtoHist();renderPtoApertura();
 }
 window.eliminarVigenciaApertura=eliminarVigenciaApertura;
+/* 2026-10-16 (a pedido de Micaela): la tabla de Historial tiene filtro tipo Excel con buscador (▼) y orden
+   (clic en el titulo) en cada columna, mismo patron que #pTabla (reusa el mismo popup: ptoColFilterSearch/
+   ToggleAll y el cierre por clic afuera), una columna "Bloque" (Estructura / Estructura NQN / Sueldos /
+   Impuestos / Concepto de Apertura) para distinguir, por ejemplo, Alquileres de CABA del de NQN, y columnas
+   redimensionables (colResizeInit, el ancho queda guardado en el navegador). Ya no ocupa todo el ancho. */
+const PH_COL_FILTRO={}; let PH_SORT=null;
+const PH_BLOQUE_LBL={"K) ESTRUCTURA":"Estructura","K) ESTRUCTURA NQN":"Estructura NQN","N) SUELDOS":"Sueldos","O) IMPUESTOS":"Impuestos"};
+const PH_BLOQUE_ORD=["Estructura","Estructura NQN","Sueldos","Impuestos","Concepto de Apertura"];
+function phValorCol(f,col){
+  if(col==="bloque") return f.bloque;
+  if(col==="cuenta") return f.cuenta+(f.concepto?" · "+f.concepto:"");
+  if(col==="responsable") return iniciales(f.responsable);
+  if(col==="desde") return mesLabel(f.desde);
+  if(col==="pto") return fmt(f.pto);
+  return "";
+}
+function phRowPass(f){
+  return Object.keys(PH_COL_FILTRO).every(col=>{ const a=PH_COL_FILTRO[col]; return !a||!a.length||a.includes(String(phValorCol(f,col)??"")); });
+}
+function openPhColFilter(col,ev){
+  ev.stopPropagation(); const btn=ev.currentTarget; closePtoColFilter();
+  const s0=new Set(); let hasEmpty=false;
+  (window.PH_FILAS_TODAS||[]).forEach(f=>{ const v=phValorCol(f,col); if(v!=null&&v!==""&&v!=="–") s0.add(String(v)); else hasEmpty=true; });
+  let vals=[...s0];
+  if(col==="pto") vals.sort((a,b)=>(parseFloat(a.replace(/\./g,"").replace(",","."))||0)-(parseFloat(b.replace(/\./g,"").replace(",","."))||0));
+  else vals.sort((a,b)=>a.localeCompare(b,'es',{numeric:true}));
+  if(hasEmpty) vals=['',...vals];
+  const sel=PH_COL_FILTRO[col]?new Set(PH_COL_FILTRO[col]):new Set(vals);
+  const item=v=>'<label class="ptofitem" data-v="'+esc(v)+'" style="display:flex;align-items:center;gap:6px;padding:3px 4px;cursor:pointer;font-size:12px"><input type="checkbox" class="ptofchk" value="'+esc(v)+'" '+(sel.has(v)?'checked':'')+'>'+(v===''?'<em style="color:var(--muted)">(Vacío)</em>':esc(v))+'</label>';
+  const pop=document.createElement('div'); pop.id='ptoFilterPop';
+  pop.style.cssText='position:absolute;z-index:9999;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px;min-width:190px;max-width:300px;font-size:12.5px';
+  pop.innerHTML='<input type="text" placeholder="Buscar" oninput="ptoColFilterSearch(this.value)" style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:7px;padding:6px 8px;margin-bottom:6px;font-size:12.5px">'
+    +'<label style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-weight:700;border-bottom:1px solid var(--line);margin-bottom:4px;cursor:pointer"><input type="checkbox" '+(sel.size===vals.length?'checked':'')+' onchange="ptoColFilterToggleAll(this.checked)">(Seleccionar todo)</label>'
+    +'<div id="ptofList" style="max-height:260px;overflow:auto">'+vals.map(item).join('')+'</div>'
+    +'<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1;padding:6px" onclick="phColFilterApply(\''+col+'\')">Aplicar</button><button class="btn" style="flex:1;padding:6px" onclick="phColFilterClear(\''+col+'\')">Limpiar</button></div>';
+  document.body.appendChild(pop);
+  const r=btn.getBoundingClientRect(); const vw=document.documentElement.clientWidth;
+  pop.style.top=(window.scrollY+r.bottom+4)+'px'; pop.style.left=(window.scrollX+Math.max(8,Math.min(r.left, vw-310)))+'px';
+  const q=pop.querySelector('input[type=text]'); if(q) q.focus();
+  setTimeout(()=>document.addEventListener('mousedown', ptoColFilterOutside, true),0);
+}
+function phColFilterApply(col){
+  const all=[...document.querySelectorAll('#ptofList .ptofchk')];
+  const visible=all.filter(c=>{ const it=c.closest('.ptofitem'); return it && it.style.display!=='none'; });
+  const chk=visible.filter(c=>c.checked).map(c=>c.value);
+  if(visible.length===all.length && chk.length===all.length) delete PH_COL_FILTRO[col];
+  else PH_COL_FILTRO[col]=chk;
+  closePtoColFilter(); renderPtoHist();
+}
+function phColFilterClear(col){ delete PH_COL_FILTRO[col]; closePtoColFilter(); renderPtoHist(); }
+function phSortToggle(col){
+  if(!PH_SORT||PH_SORT.col!==col) PH_SORT={col,dir:1};
+  else if(PH_SORT.dir===1) PH_SORT={col,dir:-1};
+  else PH_SORT=null;
+  renderPtoHist();
+}
+window.openPhColFilter=openPhColFilter; window.phColFilterApply=phColFilterApply; window.phColFilterClear=phColFilterClear; window.phSortToggle=phSortToggle;
+function phTh(label,col,ancho,alinDer){
+  const active=!!(PH_COL_FILTRO[col]&&PH_COL_FILTRO[col].length), sorting=PH_SORT&&PH_SORT.col===col;
+  const arrow=sorting?(PH_SORT.dir===1?' ▲':' ▼'):'';
+  return '<th style="width:'+ancho+'px'+(alinDer?';text-align:right':'')+'"><span style="cursor:pointer;user-select:none" onclick="phSortToggle(\''+col+'\')" title="Ordenar">'+esc(label)+'<span style="font-size:9px;color:'+(sorting?'#1a7a3a;font-weight:900':'var(--muted)')+'">'+arrow+'</span></span> '
+    +'<span class="ptofbtn" style="cursor:pointer;user-select:none" title="Filtrar (con buscador)" onclick="openPhColFilter(\''+col+'\',event)"><span style="font-size:9px;'+(active?'color:#1a7a3a;font-weight:900':'color:var(--muted)')+'">▼</span></span></th>';
+}
 function renderPtoHist(){
   const sel=document.getElementById("phCuenta"); if(!sel) return;
+  actualizarMesHist();
   const filtroKey=sel.value;
   document.getElementById("phLockNote").textContent=editable?"Edición habilitada (Gerencia)":"Edición bloqueada (ver Presupuesto·Estructura para desbloquear)";
   const cuentasPorKey={}; CONFIG_PTO.forEach(c=>cuentasPorKey[c.key]=c);
@@ -833,7 +942,8 @@ function renderPtoHist(){
     if(key==="__cfg__") return;
     if(filtroKey&&key!==filtroKey) return;
     const h=OVERRIDES[key].historial||[]; const c=cuentasPorKey[key];
-    h.forEach(e=>filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",desde:e.desde,pto:e.pto}));
+    const bloque=c?(PH_BLOQUE_LBL[c.grupo]||c.grupo||""):"";
+    h.forEach(e=>filas.push({key,cuenta:c?c.cuenta:key,concepto:"",responsable:c?c.responsable:"",bloque,desde:e.desde,pto:e.pto}));
   });
   // Vigencias por concepto de Apertura de Estructura (ej. Alquileres·PRINCI) -- se muestran en la
   // misma lista, filtradas por la cuenta elegida arriba (si hay alguna elegida).
@@ -842,23 +952,52 @@ function renderPtoHist(){
     if(filtroKey&&cuenta!==cuentaFiltro) return;
     Object.keys(APERTURA_PTO[cuenta]).forEach(concepto=>{
       const h=APERTURA_PTO[cuenta][concepto].historial||[];
-      h.forEach(e=>filas.push({key:null,cuenta,concepto,responsable:"",desde:e.desde,pto:e.pto}));
+      h.forEach(e=>filas.push({key:null,cuenta,concepto,responsable:"",bloque:"Concepto de Apertura",desde:e.desde,pto:e.pto}));
     });
   });
-  filas.sort((a,b)=>b.desde<a.desde?-1:(b.desde>a.desde?1:(a.cuenta<b.cuenta?-1:1)));
+  window.PH_FILAS_TODAS=filas;
+  filas=filas.filter(phRowPass);
+  const ordBloque=b=>{ const i=PH_BLOQUE_ORD.indexOf(b); return i<0?99:i; };
+  filas.sort((a,b)=>{
+    if(PH_SORT){
+      const d=PH_SORT.dir, c=PH_SORT.col;
+      if(c==="pto") return ((+a.pto||0)-(+b.pto||0))*d;
+      if(c==="desde") return (a.desde<b.desde?-1:(a.desde>b.desde?1:0))*d;
+      if(c==="bloque") return (ordBloque(a.bloque)-ordBloque(b.bloque))*d;
+      return String(phValorCol(a,c)).localeCompare(String(phValorCol(b,c)),'es',{numeric:true})*d;
+    }
+    // por defecto: fecha (mas nueva primero), bloque, orden fijo de cuentas (ORDEN_CUENTAS_ESTRUCTURA) y nombre
+    if(a.desde!==b.desde) return b.desde<a.desde?-1:1;
+    if(ordBloque(a.bloque)!==ordBloque(b.bloque)) return ordBloque(a.bloque)-ordBloque(b.bloque);
+    const pa=posOrdenCuenta(a.cuenta), pb=posOrdenCuenta(b.cuenta);
+    if(pa!==pb) return pa<pb?-1:1;
+    return (a.cuenta+(a.concepto||"")).localeCompare(b.cuenta+(b.concepto||""),'es');
+  });
   const rowsHtml=filas.map(f=>{
     const btn=!editable?"":(f.concepto
       ?`<button class="btn" style="padding:3px 9px;font-size:11px" onclick="eliminarVigenciaApertura('${esc(f.cuenta).replace(/'/g,"\\'")}','${esc(f.concepto).replace(/'/g,"\\'")}','${f.desde}')">Eliminar</button>`
       :`<button class="btn" style="padding:3px 9px;font-size:11px" onclick="eliminarVigencia('${esc(f.key).replace(/'/g,"\\'")}','${f.desde}')">Eliminar</button>`);
     return `<tr>
-      <td class="ell" style="max-width:260px" title="${esc(f.cuenta)}${f.concepto?" · "+esc(f.concepto):""}">${esc(f.cuenta)}${f.concepto?` <span class="mut">· ${esc(f.concepto)}</span>`:""}</td>
+      <td class="ell mut" title="${esc(f.bloque)}">${esc(f.bloque)}</td>
+      <td class="ell" title="${esc(f.cuenta)}${f.concepto?" · "+esc(f.concepto):""}">${esc(f.cuenta)}${f.concepto?` <span class="mut">· ${esc(f.concepto)}</span>`:""}</td>
       <td class="mut">${esc(iniciales(f.responsable))}</td>
       <td>${esc(mesLabel(f.desde))}</td>
       <td style="text-align:right">${fmt(f.pto)}</td>
       <td>${btn}</td>
     </tr>`;
-  }).join("")||`<tr><td colspan="5" class="mut" style="padding:16px">Sin cambios de Pto registrados todavía${filtroKey?" para esta cuenta":""}.</td></tr>`;
-  document.getElementById("phTabla").innerHTML=`<thead><tr><th>Cuenta</th><th>Resp.</th><th>Desde</th><th>Pto</th><th></th></tr></thead><tbody>${rowsHtml}</tbody>`;
+  }).join("")||`<tr><td colspan="6" class="mut" style="padding:16px">Sin Pto cargado${filtroKey?" para esta cuenta":""}${Object.keys(PH_COL_FILTRO).length?" con estos filtros":""}.</td></tr>`;
+  const t=document.getElementById("phTabla");
+  t.innerHTML=`<thead><tr>${phTh("Bloque","bloque",130)}${phTh("Cuenta","cuenta",300)}${phTh("Resp.","responsable",70)}${phTh("Desde","desde",80)}${phTh("Pto","pto",120,true)}<th style="width:90px"></th></tr></thead><tbody>${rowsHtml}</tbody>`;
+  colResizeInit(t);
+  ajustarAnchoTablaHist();
+}
+// Con table-layout:fixed el navegador solo respeta el ancho de cada columna si la tabla tiene un ancho
+// explicito (con width:auto vuelve al layout automatico y el texto largo ensancha la columna): el ancho
+// de #phTabla es siempre la suma de sus columnas, recalculado en cada render y mientras se arrastra.
+function ajustarAnchoTablaHist(){
+  const t=document.getElementById("phTabla"); if(!t) return;
+  const tot=[...t.querySelectorAll("thead th")].reduce((a,th)=>a+(parseFloat(th.style.width)||th.getBoundingClientRect().width||0),0);
+  if(tot>0) t.style.width=Math.ceil(tot)+"px";
 }
 /* ===== Apertura de Estructura: desglose transaccion por transaccion de una cuenta, agrupado por
    "Concepto" segun la regla de CLASIF_APERTURA_FN. Se agrega cuenta por cuenta, a pedido. ===== */
@@ -1697,6 +1836,7 @@ document.addEventListener('mousemove', e=>{
   COLRESIZE_DRAG.th.style.width=w+'px';
   if(COLRESIZE_DRAG.table.id==="pTabla"){ actualizarStickyPto(); actualizarStickyPtoDerecha(); }
   else if(COLRESIZE_DRAG.table.id==="paTabla"){ sincronizarAnchoPtoConcepto(); }
+  else if(COLRESIZE_DRAG.table.id==="phTabla"){ ajustarAnchoTablaHist(); }
 });
 document.addEventListener('mouseup', ()=>{
   if(!COLRESIZE_DRAG) return;
@@ -3342,7 +3482,7 @@ const APERTURA_PTO={}; // cuenta -> concepto -> {historial:[{desde,pto}, ...]}
 // algun saldo o cargo residual), avisame el valor real y lo corrijo en Historial de cambios.
 const APERTURA_PTO_SEED={
   "Alquileres":{
-    "PRINCI":[{desde:"2026-04",pto:9000000},{desde:"2026-07",pto:0}],
+    "PRINCI":[{desde:"2026-04",pto:9000000}], // 2026-10-16: sin la vigencia jul-26 -> 0 (todo desde abr-26, ver normalizarVigenciasOverrides)
     "SPWORK":[{desde:"2026-04",pto:7050000}],
     "BERGER":[{desde:"2026-04",pto:1400000}],
     "Expensas Of. CABA":[{desde:"2026-04",pto:730000}]
@@ -4363,6 +4503,7 @@ async function onCargarInformeCrudo(file){
   await cargarTodoDesdeSupabase();
   if(loadAperturaPtoSeed()) saveAperturaPto();
   if(migrarPtoEnergiaAux02()) saveAperturaPto();
+  if(normalizarVigenciasApertura()) saveAperturaPto();
   initEerrUI();
   initPto();
   initPtoHist();
