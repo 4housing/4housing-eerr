@@ -857,6 +857,12 @@ function initPtoHist(){
   });
   // Edicion en la tabla: cambiar el Pto de una fila (Enter o al salir del campo).
   document.getElementById("phTabla").addEventListener("change",e=>{
+    const bsel=e.target.closest(".ph-base-sel");
+    if(bsel){
+      if(!editable){ renderPtoHist(); return; }
+      const o=OVERRIDES[bsel.dataset.key]; if(o){ o.base=bsel.value==="anual"?"anual":"mensual"; saveOverrides(); renderPto(); }
+      renderPtoHist(); return;
+    }
     const inp=e.target.closest(".ph-pto-inp"); if(!inp) return;
     if(!editable){ renderPtoHist(); return; }
     const v=parseFloat(String(inp.value).replace(/\./g,"").replace(/,/g,"."))||0;
@@ -987,6 +993,7 @@ function phValorCol(f,col){
   if(col==="cuenta") return f.cuenta+(f.concepto?" · "+f.concepto:"");
   if(col==="responsable") return iniciales(f.responsable);
   if(col==="desde") return mesLabel(f.desde);
+  if(col==="base") return f.concepto||f.suma?"":(((OVERRIDES[f.key]||{}).base==="anual")?"Anual":"Mensual");
   if(col==="pto") return fmt(f.pto);
   return "";
 }
@@ -1103,6 +1110,12 @@ function renderPtoHist(){
       :editable
       ?`<input class="ph-pto-inp" type="text" inputmode="numeric" value="${fmt(f.pto)}" data-desde="${f.desde}" ${f.concepto?`data-cta="${esc(f.cuenta)}" data-con="${esc(f.concepto)}"`:`data-key="${esc(f.key)}"`} title="Escribí el nuevo Pto y Enter" style="width:100%;box-sizing:border-box;text-align:right;padding:3px 5px;border:1px solid var(--line);border-radius:6px;font-size:11px">`
       :fmt(f.pto);
+    // Base (a pedido de Micaela, 2026-10-16): Mensual = el Pto es por mes; Anual = el Pto es el total del año y
+    // Presupuesto lo reparte 1/12 por mes (misma "base" que el selector M/A de Presupuesto·Estructura). Es por
+    // cuenta (no por vigencia). No aplica a conceptos de Apertura ni a cuentas que son suma de su apertura.
+    const baseVal=((OVERRIDES[f.key]||{}).base==="anual")?"anual":"mensual";
+    const baseCell=(f.concepto||f.suma)?'<span class="mut">–</span>'
+      :`<select class="ph-base-sel" data-key="${esc(f.key)}"${editable?"":" disabled"} style="font-size:11px;padding:2px 4px"><option value="mensual"${baseVal==="mensual"?" selected":""}>Mensual</option><option value="anual"${baseVal==="anual"?" selected":""}>Anual</option></select>`;
     const cuentaCell=f.concepto
       ?`<span style="padding-left:16px" class="mut">↳ apertura:</span> ${esc(f.concepto)}`
       :`<b>${esc(f.cuenta)}</b>${f.suma?' <span class="mut" style="font-size:10px">= suma de la apertura</span>':""}`;
@@ -1111,12 +1124,13 @@ function renderPtoHist(){
       <td class="ell" style="text-align:left" title="${esc(f.cuenta)}${f.concepto?" · "+esc(f.concepto):""}">${cuentaCell}</td>
       <td class="mut" style="text-align:center">${esc(iniciales(f.responsable))}</td>
       <td style="text-align:center">${esc(mesLabel(f.desde))}</td>
+      <td style="text-align:center">${baseCell}</td>
       <td style="text-align:right">${ptoCell}</td>
       <td style="white-space:nowrap">${btn}</td>
     </tr>`;
-  }).join("")||`<tr><td colspan="6" class="mut" style="padding:16px">Sin Pto cargado${filtroCuenta?" para esta cuenta":""}${Object.keys(PH_COL_FILTRO).length?" con estos filtros":""}.</td></tr>`;
+  }).join("")||`<tr><td colspan="7" class="mut" style="padding:16px">Sin Pto cargado${filtroCuenta?" para esta cuenta":""}${Object.keys(PH_COL_FILTRO).length?" con estos filtros":""}.</td></tr>`;
   const t=document.getElementById("phTabla");
-  t.innerHTML=`<thead><tr>${phTh("Bloque","bloque",120)}${phTh("Cuenta","cuenta",280)}${phTh("Resp.","responsable",60)}${phTh("Desde","desde",75)}${phTh("Pto","pto",120,true)}<th style="width:200px"></th></tr></thead><tbody>${rowsHtml}</tbody>`;
+  t.innerHTML=`<thead><tr>${phTh("Bloque","bloque",120)}${phTh("Cuenta","cuenta",280)}${phTh("Resp.","responsable",60)}${phTh("Desde","desde",75)}${phTh("Base","base",90)}${phTh("Pto","pto",120,true)}<th style="width:200px"></th></tr></thead><tbody>${rowsHtml}</tbody>`;
   colResizeInit(t);
   ajustarAnchoTablaHist();
 }
