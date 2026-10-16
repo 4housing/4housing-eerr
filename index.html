@@ -871,7 +871,9 @@ function initPtoHist(){
     const bsel=e.target.closest(".ph-base-sel");
     if(bsel){
       if(!editable){ renderPtoHist(); return; }
-      const o=OVERRIDES[bsel.dataset.key]; if(o){ o.base=bsel.value==="anual"?"anual":"mensual"; saveOverrides(); renderPto(); }
+      const nb=bsel.value==="anual"?"anual":"mensual";
+      if(bsel.dataset.con){ const ent=(APERTURA_PTO[bsel.dataset.cta]||{})[bsel.dataset.con]; if(ent){ ent.base=nb; saveAperturaPto(); renderPto(); renderPtoApertura(); } }
+      else { const o=OVERRIDES[bsel.dataset.key]; if(o){ o.base=nb; saveOverrides(); renderPto(); } }
       renderPtoHist(); return;
     }
     const inp=e.target.closest(".ph-pto-inp"); if(!inp) return;
@@ -1004,7 +1006,11 @@ function phValorCol(f,col){
   if(col==="cuenta") return f.cuenta+(f.concepto?" · "+f.concepto:"");
   if(col==="responsable") return iniciales(f.responsable);
   if(col==="desde") return mesLabel(f.desde);
-  if(col==="base") return f.concepto||f.suma?"":(((OVERRIDES[f.key]||{}).base==="anual")?"Anual":"Mensual");
+  if(col==="base"){
+    if(f.suma) return "Mensual (suma)";
+    if(f.concepto) return (((APERTURA_PTO[f.cuenta]||{})[f.concepto]||{}).base==="anual")?"Anual":"Mensual";
+    return (((OVERRIDES[f.key]||{}).base==="anual")?"Anual":"Mensual");
+  }
   if(col==="pto") return fmt(f.pto);
   return "";
 }
@@ -1163,9 +1169,13 @@ function renderPtoHist(){
     // Base (a pedido de Micaela, 2026-10-16): Mensual = el Pto es por mes; Anual = el Pto es el total del año y
     // Presupuesto lo reparte 1/12 por mes (misma "base" que el selector M/A de Presupuesto·Estructura). Es por
     // cuenta (no por vigencia). No aplica a conceptos de Apertura ni a cuentas que son suma de su apertura.
-    const baseVal=((OVERRIDES[f.key]||{}).base==="anual")?"anual":"mensual";
-    const baseCell=(f.concepto||f.suma)?'<span class="mut">–</span>'
-      :`<select class="ph-base-sel" data-key="${esc(f.key)}"${editable?"":" disabled"} style="font-size:11px;padding:2px 4px"><option value="mensual"${baseVal==="mensual"?" selected":""}>Mensual</option><option value="anual"${baseVal==="anual"?" selected":""}>Anual</option></select>`;
+    // 2026-10-16: tambien los conceptos de Apertura tienen base (Mensual/Anual). La fila de una cuenta que es
+    // suma de su apertura es siempre mensual (cada concepto aporta su parte por mes): ahi solo se informa.
+    const baseVal=f.concepto?((((APERTURA_PTO[f.cuenta]||{})[f.concepto]||{}).base==="anual")?"anual":"mensual")
+      :(((OVERRIDES[f.key]||{}).base==="anual")?"anual":"mensual");
+    const baseData=f.concepto?`data-cta="${esc(f.cuenta)}" data-con="${esc(f.concepto)}"`:`data-key="${esc(f.key)}"`;
+    const baseCell=f.suma?'<span class="mut" title="La suma de la apertura es mensual: la base se define en cada concepto">Mensual (suma)</span>'
+      :`<select class="ph-base-sel" ${baseData}${editable?"":" disabled"} style="font-size:11px;padding:2px 4px"><option value="mensual"${baseVal==="mensual"?" selected":""}>Mensual</option><option value="anual"${baseVal==="anual"?" selected":""}>Anual</option></select>`;
     const cuentaCell=f.concepto
       ?`<span style="padding-left:16px" class="mut">↳ apertura:</span> ${esc(f.concepto)}`
       :`<b>${esc(f.cuenta)}</b>${f.suma?' <span class="mut" style="font-size:10px">= suma de la apertura</span>':""}`;
@@ -1471,7 +1481,12 @@ function ptoDesdeMoneda(valor,cur,desdeYM,ym){
   return pesosEnMes(valor/(f!=null&&f?f:1),ym,desdeYM);
 }
 function ptoEnMesMoneda(key,ym,cur){ return ptoVigenciaEnMoneda(ptoVigente(key,ym),cur,ym); }
-function aperturaPtoEnMesMoneda(cuenta,concepto,ym,cur){ return ptoVigenciaEnMoneda(aperturaPtoVigente(cuenta,concepto,ym),cur,ym); }
+// 2026-10-16: cada concepto puede tener base "anual" (el Pto cargado es el total del año): aporta 1/12 por mes.
+function factorBaseConcepto(cuenta,concepto){
+  const k=aperturaPtoKeyFor(cuenta,concepto); const ent=k?(APERTURA_PTO[cuenta]||{})[k]:null;
+  return ent&&ent.base==="anual"?1/12:1;
+}
+function aperturaPtoEnMesMoneda(cuenta,concepto,ym,cur){ return ptoVigenciaEnMoneda(aperturaPtoVigente(cuenta,concepto,ym),cur,ym)*factorBaseConcepto(cuenta,concepto); }
 /* Filtros "Cuenta contable real" y "Auxiliar" de Apertura (pedido de Micaela, para controlar, por ejemplo, si
    la patente o el seguro automotor se registran bien en cada rodado). Las opciones salen de los datos
    cargados de la cuenta (todos los meses, sin acotar por Grupo ni por otro filtro) y se rearman en cada
@@ -1599,7 +1614,12 @@ function renderPtoApertura(){
   const filtroFnPto=APERTURA_FILTRO_FN[cuenta];
   const realesPto=new Set((cuentaRealSel?[cuentaRealSel]:(APERTURA_CUENTAS_MAP[cuenta]||[cuenta])).map(normApertura));
   const gruposPto=(grupoSel?[grupoSel]:["K) ESTRUCTURA","K) ESTRUCTURA NQN"]).map(normApertura);
-  const keysPto=filtroFnPto?[]:CONFIG_PTO.filter(c=>realesPto.has(normApertura(c.cuenta))&&gruposPto.includes(normApertura(c.grupo))).map(c=>c.key);
+  // Cta Part Socios (filtro por socio): las cuentas "Cta part <socio>" de Estructura/NQN del socio elegido (o de
+  // los 4 con "Todos") -- desde 2026-10-16 su Pto se carga directo en cada cuenta, sin apertura por concepto.
+  const gruposK=["K) ESTRUCTURA","K) ESTRUCTURA NQN"].map(normApertura);
+  const keysPto=CONFIG_PTO.filter(c=>realesPto.has(normApertura(c.cuenta))&&(filtroFnPto
+    ?(gruposK.includes(normApertura(c.grupo))&&(!grupoSel||normApertura(filtroFnPto({cuenta:c.cuenta}))===normApertura(grupoSel)))
+    :gruposPto.includes(normApertura(c.grupo)))).map(c=>c.key);
   const conceptosSueltos=filtroFnPto?[]:ptoConceptos.filter(k=>!keyCuentaDeConcepto(cuenta,k));
   const primerDesdeKey=key=>{
     const cs=conceptosSumadosDeKey(key);
@@ -1607,7 +1627,6 @@ function renderPtoApertura(){
     return ds.length?ds.reduce((a,b)=>a<b?a:b):null;
   };
   const ptoMesFn=m=>{
-    if(filtroFnPto) return tienePtoPorConcepto?ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMesMoneda(cuenta,k,m,cur),0):0;
     let t=0;
     keysPto.forEach(key=>{
       const pd=primerDesdeKey(key); if(!pd||m<pd) return;
@@ -1913,7 +1932,8 @@ window.togglePtoDetalle=togglePtoDetalle;
   const mesesAcum=allm.filter(m=>m>=fechaBaseYM&&m<=ultimo);
   let tRealUlt=0,tPtoUlt=0,tRealPer=0,tPtoPer=0,tAcumMensual=0,over=0; const colTot=meses.map(()=>0);
   const body=rows.map(c=>{
-    const ov=OVERRIDES[c.key],base=ov.base;
+    const esSumaAp=conceptosSumadosDeKey(c.key).length>0;
+    const ov=OVERRIDES[c.key],base=esSumaAp?"mensual":ov.base; // la suma de la apertura ya es mensual (cada concepto aporta su parte por mes)
     const vigUlt=ptoVigente(c.key,ultimo);
     const ptoShow=vigUlt?ptoVigenciaEnMoneda(vigUlt,cur,fechaBaseYM):0;
     const ptoMesFn=m=>{const v=ptoEnMesMoneda(c.key,m,cur);return base==="anual"?v/12:v;};
@@ -1939,7 +1959,7 @@ window.togglePtoDetalle=togglePtoDetalle;
     const filaPrincipal=`<tr>
       <td class="fz fz1 ell real" title="${esc(c.cuenta)}">${c.cuenta}${vigLink}</td>
       <td class="fz fz2 ell real" title="${esc(c.responsable||"")}">${iniciales(c.responsable)}</td>
-      ${pMostrarDetallePto?`<td class="fz fz3 info"><select class="base-sel" data-c="${esc(c.key)}"${editable?"":" disabled"}><option value="mensual"${base==="mensual"?" selected":""}>M</option><option value="anual"${base==="anual"?" selected":""}>A</option></select></td>
+      ${pMostrarDetallePto?`<td class="fz fz3 info"><select class="base-sel" data-c="${esc(c.key)}"${editable&&!esSumaAp?"":" disabled"}${esSumaAp?' title="Suma de su apertura: la base se define en cada concepto (Historial de cambios)"':""}><option value="mensual"${base==="mensual"?" selected":""}>M</option><option value="anual"${base==="anual"?" selected":""}>A</option></select></td>
       <td class="fz fz4 info">${conceptosSumadosDeKey(c.key).length?`<span title="Suma de su apertura por concepto: se modifica en Historial de cambios, concepto por concepto" style="display:inline-block;width:100%;text-align:right">Σ ${fmt(ptoShow)}</span>`:`<input class="pto-inp" type="text" inputmode="numeric" data-c="${esc(c.key)}" value="${fmt(ptoShow)}"${editable?"":" disabled"}>`}</td>
       <td class="fz fz5 grp info">${fmt(ptoMesUlt)}</td>`:""}${cells}
       <td class="real fzr"><b>${fmt(realPer)}</b></td>
@@ -3735,15 +3755,10 @@ const APERTURA_PTO_SEED={
     "K) ESTRUCTURA":[{desde:"2026-04",pto:100000}],
     "K) ESTRUCTURA NQN":[{desde:"2026-04",pto:400000}]
   },
-  // A pedido de Micaela: el único gasto de "Cta Part Socios" con presupuesto propio es el Autónomos de
-  // Estructura, $310.000 por socio desde abril/2026 (mismo monto para los 4). Impuestos, Proveedores y
-  // Ajustes Cuentas no tienen Pto cargado todavía.
-  "Cta Part Socios":{
-    "Pedretti Gustavo · Estructura (Autónomos)":[{desde:"2026-04",pto:310000}],
-    "Seoane Leandro · Estructura (Autónomos)":[{desde:"2026-04",pto:310000}],
-    "Seoane Micaela · Estructura (Autónomos)":[{desde:"2026-04",pto:310000}],
-    "Spinetto Pablo · Estructura (Autónomos)":[{desde:"2026-04",pto:310000}]
-  },
+  // "Cta Part Socios" tuvo aca el Autonomos de Estructura ($310.000 por socio desde abr-26) como Pto por
+  // concepto. 2026-10-16 (a pedido de Micaela: "cta part no quiero que lo muestre aperturado") ese Pto pasa a
+  // las 4 cuentas "Cta part <socio>" de Presupuesto (ver migrarCtaPartSinApertura) y se saca de la semilla
+  // para que no vuelva a crearse.
   // A pedido de Micaela, adjunto de su planilla: Food & Bev Oficina ($5.538.800) + Taller
   // ($1.995.200) = $7.534.000 para "K) ESTRUCTURA" (CABA); $1.250.000 para "K) ESTRUCTURA NQN"
   // (Neuquén). Igual que Energía, el Pto es por Aux 02, no por proveedor puntual.
@@ -3855,6 +3870,28 @@ function migrarPtoEnergiaAux02(){
   return hubo;
 }
 async function saveAperturaPto(){ invalidarSumaApertura(); guardarClave('APERTURA_PTO',APERTURA_PTO); }
+/* 2026-10-16 (a pedido de Micaela): "cta part no quiero que lo muestre aperturado". Una sola vez (flag en Config
+   Pto): el Pto por concepto de "Cta Part Socios" (el Autonomos de cada socio, $310.000 desde abr-26) se copia
+   tal cual (vigencias y base) a la cuenta "Cta part <socio>" de Estructura -- asi el Pto no cambia -- y se
+   borra de APERTURA_PTO (y de la semilla), para que esas 4 cuentas se editen directo como cualquier otra. */
+function migrarCtaPartSinApertura(){
+  if(flagCfgPto("ctaPartSinApertura")) return false;
+  const m=APERTURA_PTO["Cta Part Socios"];
+  if(m){
+    Object.keys(m).forEach(con=>{
+      const socio=(APERTURA_PTO_FILTRO["Cta Part Socios"]||{})[con]; const h=(m[con]||{}).historial;
+      if(!socio||!h||!h.length) return;
+      const c=CONFIG_PTO.find(x=>x.grupo==="K) ESTRUCTURA"&&normApertura(x.cuenta)===normApertura("Cta part "+socio)); if(!c) return;
+      if(!OVERRIDES[c.key]) OVERRIDES[c.key]={base:"mensual",historial:[]};
+      OVERRIDES[c.key].historial=h.map(e=>({desde:e.desde,pto:e.pto}));
+      OVERRIDES[c.key].base=m[con].base==="anual"?"anual":"mensual";
+    });
+    delete APERTURA_PTO["Cta Part Socios"];
+  }
+  setFlagCfgPto("ctaPartSinApertura");
+  invalidarSumaApertura();
+  return true;
+}
 /* 2026-10-16 (a pedido de Micaela): "que este el Alquileres que sumariza el detalle de lo aperturado abajo,
    yo modifico individualmente, y automaticamente se actualiza la sumatoria de Estructura o Estructura NQN
    segun corresponda". Cada concepto con Pto de Apertura se asigna a UNA cuenta de Presupuesto (key de
@@ -3879,11 +3916,7 @@ function invalidarSumaApertura(){ SUMA_APERTURA_CACHE=null; }
 function keyCuentaDeConcepto(cta,con){
   const ent=(APERTURA_PTO[cta]||{})[con];
   if(ent&&ent.key&&CONFIG_PTO.some(c=>c.key===ent.key)) return ent.key;
-  if(cta==="Cta Part Socios"){
-    const socio=(APERTURA_PTO_FILTRO[cta]||{})[con]; if(!socio) return null;
-    const c=CONFIG_PTO.find(x=>x.grupo==="K) ESTRUCTURA"&&normApertura(x.cuenta)===normApertura("Cta part "+socio));
-    return c?c.key:null;
-  }
+  if(cta==="Cta Part Socios") return null; // 2026-10-16: Cta part sin apertura (Pto directo en cada cuenta)
   let g=(APERTURA_CONCEPTO_BLOQUE[cta]||{})[con]||null;
   if(!g&&(con==="K) ESTRUCTURA"||con==="K) ESTRUCTURA NQN")) g=con;
   if(!g) g=grupoDeConceptoApertura(cta,con);
@@ -3914,7 +3947,8 @@ function ptoVigenteSumaApertura(cs,ym){
     const h=((APERTURA_PTO[cta]||{})[con]||{}).historial||[]; if(!h.length) return null;
     const ord=h.slice().sort((a,b)=>a.desde<b.desde?-1:(a.desde>b.desde?1:0));
     let el=ord[0]; for(const e of ord){ if(e.desde<=ym) el=e; else break; }
-    return el;
+    const f=((APERTURA_PTO[cta]||{})[con]||{}).base==="anual"?1/12:1; // concepto con base anual: 1/12 por mes
+    return {desde:el.desde,pto:(+el.pto||0)*f};
   }).filter(Boolean);
   if(!vs.length) return null;
   const D=vs.reduce((m,v)=>v.desde>m?v.desde:m,vs[0].desde);
@@ -3953,7 +3987,7 @@ function aperturaPtoVigente(cuenta,concepto,ym){
 function aperturaPtoEnMes(cuenta,concepto,ym){
   const v=aperturaPtoVigente(cuenta,concepto,ym);
   if(!v) return 0;
-  return pesosEnMes(v.pto,v.desde,ym);
+  return pesosEnMes(v.pto,v.desde,ym)*factorBaseConcepto(cuenta,concepto);
 }
 function agregarVigenciaApertura(cuenta,concepto,desde,pto){
   if(!APERTURA_PTO[cuenta]) APERTURA_PTO[cuenta]={};
@@ -4806,6 +4840,7 @@ async function onCargarInformeCrudo(file){
   if(loadAperturaPtoSeed()) saveAperturaPto();
   if(migrarPtoEnergiaAux02()) saveAperturaPto();
   { const na=normalizarVigenciasApertura(); if(na.cambio) saveAperturaPto(); if(na.flag) saveOverrides(); }
+  if(migrarCtaPartSinApertura()){ saveAperturaPto(); saveOverrides(); }
   initEerrUI();
   initPto();
   initPtoHist();
