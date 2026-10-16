@@ -661,6 +661,9 @@ function ptoVigente(key,ym){
   if(cs.length) return ptoVigenteSumaApertura(cs,ym);
   const h=(OVERRIDES[key]||{}).historial;
   if(!h||!h.length) return null;
+  // 2026-10-16 (a pedido de Micaela): el Pto arranca desde su primera vigencia -- antes un mes anterior tomaba
+  // igual la primera (el Pto de abr-26 aparecia tambien en 2025, con desvios y colores en meses sin presupuesto).
+  if(ym<h.reduce((m,e)=>e.desde<m?e.desde:m,h[0].desde)) return null;
   let elegido=h[0];
   for(const e of h){ if(e.desde<=ym) elegido=e; else break; }
   return elegido;
@@ -1929,7 +1932,7 @@ window.togglePtoDetalle=togglePtoDetalle;
     return (vy?vy.pto:0)-(vx?vx.pto:0);
   });
   const mesesAcum=allm.filter(m=>m>=fechaBaseYM&&m<=ultimo);
-  let tRealUlt=0,tPtoUlt=0,tRealPer=0,tPtoPer=0,tAcumMensual=0,over=0; const colTot=meses.map(()=>0);
+  let tRealUlt=0,tPtoUlt=0,tRealPer=0,tPtoPer=0,tAcumMensual=0,over=0,tRealPerFb=0; const colTot=meses.map(()=>0);
   const colPtoG=meses.map(()=>0); // Pto global del mes (ver filas "Pto" y "Desvío" debajo de TOTAL)
   const body=rows.map(c=>{
     const esSumaAp=conceptosSumadosDeKey(c.key).length>0;
@@ -1942,9 +1945,12 @@ window.togglePtoDetalle=togglePtoDetalle;
     meses.forEach((m,k)=>{ if(m>=fechaBaseYM) colPtoG[k]+=ptoMesCuentaKey(c.key,m,cur); });
     const realUlt=(c.serie[ultimo]?c.serie[ultimo][cur]:0), desvUlt=realUlt-ptoMesUlt;
     const realPer=reals.reduce((s,v)=>s+v,0);
+    // Desde la fecha base se compara contra el Pto (sin Pto = gasto sin presupuestar); antes no hay Pto ni desvío
+    // (2026-10-16, mismo criterio que las filas globales Pto/Desvío y que Apertura).
+    const realPerFb=reals.reduce((s,v,k)=>s+(meses[k]>=fechaBaseYM?v:0),0);
     const ptoPer=meses.reduce((s,m)=>s+ptoMesFn(m),0);
-    tPtoUlt+=ptoMesUlt;tRealUlt+=realUlt;tPtoPer+=ptoPer;tRealPer+=realPer;if(realPer>ptoPer)over++;
-    const cells=meses.map((m,k)=>{const v=reals[k],ptoM=ptoMesFn(m);return `<td class="real mescol${v>ptoM?' over':''}">${v?fmt(v):"–"}</td>`;}).join("");
+    tPtoUlt+=ptoMesUlt;tRealUlt+=realUlt;tPtoPer+=ptoPer;tRealPer+=realPer;tRealPerFb+=realPerFb;if(realPerFb>ptoPer)over++;
+    const cells=meses.map((m,k)=>{const v=reals[k],ptoM=ptoMesFn(m);return `<td class="real mescol${m>=fechaBaseYM&&v>ptoM?' over':''}">${v?fmt(v):"–"}</td>`;}).join("");
     let acumCell;
     if(base==="anual"){
       const realAcum=mesesAcum.reduce((s,m)=>s+(c.serie[m]?c.serie[m][cur]:0),0);
@@ -1996,7 +2002,7 @@ window.togglePtoDetalle=togglePtoDetalle;
   const respLegend=[...new Set(rows.map(c=>c.responsable).filter(Boolean))].sort().map(n=>`<b>${iniciales(n)}</b>=${esc(n.replace(/\s*,\s*/,", "))}`).join(" · ");
   document.getElementById("pKpis").innerHTML=
     `<div class="kpi"><div class="k-lbl">Real del período</div><div class="k-val">${curLbl} ${fmtM(tRealPer)}</div></div>
-     <div class="kpi"><div class="k-lbl">Desvío período</div><div class="k-val" style="color:${tRealPer>tPtoPer?"var(--cost)":"var(--income)"}">${curLbl} ${fmtM(tRealPer-tPtoPer)}</div></div>
+     <div class="kpi"><div class="k-lbl">Desvío período</div><div class="k-val" style="color:${tRealPerFb>tPtoPer?"var(--cost)":"var(--income)"}">${curLbl} ${fmtM(tRealPerFb-tPtoPer)}</div></div>
      <div class="kpi"><div class="k-lbl">Líneas excedidas</div><div class="k-val">${over}</div></div>
      <div class="kpi"><div class="k-lbl">Acum. mensuales desde ${esc(mesLabel(fechaBaseYM))}</div><div class="k-val" style="color:${tAcumMensual>0?"var(--cost)":"var(--income)"}">${curLbl} ${fmtM(tAcumMensual)}</div></div>`;
   const notaMonedaPto=cur===1||cur===2?`<div style="margin-bottom:6px"><b>Pto en ${cur===1?"USD Oficial":"USD Billete"}</b>: se valoriza una sola vez al tipo de cambio del último día del mes en que arranca su vigencia, y de ahí en adelante es siempre el mismo valor en USD (no se ajusta por inflación); se compara con el gasto de cada mes en esa moneda.</div>`:"";
