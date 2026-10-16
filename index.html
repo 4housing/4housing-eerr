@@ -288,7 +288,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
     </div>
     <div id="ptoCfg" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 2px"></div>
     <div class="kpis" id="pKpis"></div>
-    <div class="bar"><div class="lock"><span id="lockState">Edición bloqueada</span><input id="lockKey" class="lockkey" type="password" placeholder="Clave" style="display:none"><button class="lockbtn" id="btnLock">Desbloquear (Gerencia)</button></div><button class="btn" id="btnCsv">Descargar Excel</button><button class="btn" id="btnPdf">Imprimir / PDF</button></div>
+    <div class="bar"><div class="lock"><span id="lockState">Edición bloqueada</span><input id="lockKey" class="lockkey" type="password" placeholder="Clave" style="display:none"><button class="lockbtn" id="btnLock">Desbloquear (Gerencia)</button></div><button class="btn" id="btnCsv">Descargar Excel</button><button class="btn" id="btnPtoXlsx" title="Excel con el Pto mes a mes: hojas Total, Estructura y Estructura NQN, en el orden de los informes, con la apertura de cada cuenta agrupada (+/− para expandir o contraer)">Exportar Pto (Excel)</button><button class="btn" id="btnPdf">Imprimir / PDF</button></div>
     <div class="table-wrap pto-wrap"><table id="pTabla"></table></div>
     <div class="foot" id="pFoot"></div>
   </div>
@@ -811,6 +811,7 @@ async function initPto(){
   const togglePto=document.getElementById("pTogglePtoPesos");
   if(togglePto)togglePto.addEventListener("change",()=>{pMostrarDetallePto=togglePto.checked;renderPto();});
   document.getElementById("btnCsv").addEventListener("click",exportTabla);
+  { const bx=document.getElementById("btnPtoXlsx"); if(bx) bx.addEventListener("click",exportarPtoDetalleExcel); }
   document.getElementById("btnPdf").addEventListener("click",()=>window.print());
   document.getElementById("btnLock").addEventListener("click",onLockClick);
   document.getElementById("lockKey").addEventListener("keydown",e=>{if(e.key==="Enter")onLockClick();});
@@ -2129,6 +2130,72 @@ function downloadCSV(){
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 }
 
+/* 2026-10-16 (a pedido de Micaela): Excel con el detalle del Pto mes a mes, "para saber como se conforma".
+   - Periodo y moneda: los elegidos arriba en Presupuesto·Estructura (Desde/Hasta y Moneda).
+   - Mismo calculo que las filas globales Pto/Desvío (ptoMesCuentaKey: desde la fecha base / primera vigencia, base
+     anual 1/12) -- el total de cada hoja coincide con la fila "Pto" de Presupuesto (con "Todas las cuentas").
+   - Hojas: "Total" (Estructura + Estructura NQN con sus subtotales), "Estructura" y "Estructura NQN".
+   - Orden: el de los informes (ORDEN_CUENTAS_ESTRUCTURA). Solo cuentas con Pto en el periodo.
+   - Las cuentas que son suma de su apertura llevan debajo sus conceptos, agrupados con el esquema de Excel
+     (botones +/− y 1/2/3 del margen) para expandir o contraer. */
+function exportarPtoDetalleExcel(){
+  if(typeof XLSX==="undefined"){ alert("No está disponible la librería de Excel."); return; }
+  const allm=pMonths(), i0=+document.getElementById("pDesde").value, i1=+document.getElementById("pHasta").value;
+  const meses=allm.slice(Math.min(i0,i1),Math.max(i0,i1)+1);
+  const cur=+document.getElementById("pMoneda").value||0, fb=fechaBasePto();
+  const r0=v=>Math.round((+v||0)*100)/100;
+  const ordAp=(cta,con)=>{ const o=APERTURA_ORDEN[cta]||[]; const i=o.indexOf(con); return i<0?9999:i; };
+  const filasBloque=g=>{
+    const out=[]; const tot=meses.map(()=>0);
+    CONFIG_PTO.filter(c=>c.grupo===g).sort((a,b)=>{ const pa=posOrdenCuenta(a.cuenta), pb=posOrdenCuenta(b.cuenta); return pa!==pb?(pa<pb?-1:1):a.cuenta.localeCompare(b.cuenta,'es'); }).forEach(c=>{
+      const vals=meses.map(m=>m>=fb?r0(ptoMesCuentaKey(c.key,m,cur)):0);
+      if(!vals.some(v=>Math.abs(v)>0.004)) return;
+      vals.forEach((v,i)=>tot[i]+=v);
+      const cs=conceptosSumadosDeKey(c.key);
+      out.push({tipo:"cuenta",cuenta:c.cuenta,concepto:cs.length?"(suma de la apertura)":"",resp:c.responsable||"",base:cs.length?"Mensual (suma)":(((OVERRIDES[c.key]||{}).base==="anual")?"Anual":"Mensual"),vals});
+      cs.slice().sort((a,b)=>(ordAp(a.cta,a.con)-ordAp(b.cta,b.con))||a.con.localeCompare(b.con,'es')).forEach(({cta,con})=>{
+        out.push({tipo:"concepto",cuenta:c.cuenta,concepto:con,resp:"",base:(((APERTURA_PTO[cta]||{})[con]||{}).base==="anual")?"Anual":"Mensual",
+          vals:meses.map(m=>m>=fb?r0(aperturaPtoEnMesMoneda(cta,con,m,cur)):0)});
+      });
+    });
+    return {out,tot};
+  };
+  const hdr=["Cuenta","Concepto (apertura)","Resp.","Base",...meses.map(m=>mesLabel(m)),"Total período"];
+  const sumar=a=>a.reduce((x,y)=>x+y,0);
+  const fmtNum='#,##0;[Red]-#,##0;"–"';
+  const hacerHoja=(titulo,secciones)=>{
+    const aoa=[[`Presupuesto · ${titulo} · en ${MONEDA_NOMBRE[cur]} · ${mesLabel(meses[0])} a ${mesLabel(meses[meses.length-1])}`],[`Desde la fecha base (${mesLabel(fb)}) / primera vigencia de cada cuenta. Base anual repartida 1/12 por mes. Usá los botones +/− (o 1/2/3) del margen izquierdo para expandir o contraer la apertura.`],[],hdr];
+    const niveles=[0,0,0,0]; const negritas=[3];
+    const totGral=meses.map(()=>0);
+    const conSecciones=secciones.length>1;
+    secciones.forEach(({nombre,grupo})=>{
+      const {out,tot}=filasBloque(grupo);
+      if(conSecciones){ aoa.push([nombre]); niveles.push(0); negritas.push(aoa.length-1); }
+      const base=conSecciones?1:0;
+      out.forEach(f=>{
+        const etq=f.tipo==="concepto"?"↳ "+(PH_BLOQUE_LBL[f.concepto]||f.concepto):f.concepto; // Energía/Food & Bev: el concepto es el bloque
+        aoa.push([f.tipo==="concepto"?"":f.cuenta,etq,f.resp,f.base,...f.vals,r0(sumar(f.vals))]);
+        niveles.push(f.tipo==="concepto"?base+1:base);
+      });
+      tot.forEach((v,i)=>totGral[i]+=v);
+      if(conSecciones){ aoa.push([`Total ${nombre}`,"","","",...tot.map(r0),r0(sumar(tot))]); niveles.push(0); negritas.push(aoa.length-1); aoa.push([]); niveles.push(0); }
+    });
+    aoa.push(["TOTAL","","","",...totGral.map(r0),r0(sumar(totGral))]); niveles.push(0); negritas.push(aoa.length-1);
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws["!rows"]=niveles.map(l=>l?{level:l}:{});
+    ws["!outline"]={above:true}; // la cuenta queda ARRIBA de su apertura
+    ws["!cols"]=[{wch:34},{wch:34},{wch:7},{wch:14},...meses.map(()=>({wch:13})),{wch:15}];
+    const rango=XLSX.utils.decode_range(ws["!ref"]);
+    for(let R=4;R<=rango.e.r;R++) for(let C=4;C<=rango.e.c;C++){ const ref=XLSX.utils.encode_cell({r:R,c:C}); if(ws[ref]&&typeof ws[ref].v==="number") ws[ref].z=fmtNum; }
+    return ws;
+  };
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,hacerHoja("Total",[{nombre:"Estructura",grupo:"K) ESTRUCTURA"},{nombre:"Estructura NQN",grupo:"K) ESTRUCTURA NQN"}]),"Total");
+  XLSX.utils.book_append_sheet(wb,hacerHoja("Estructura",[{nombre:"Estructura",grupo:"K) ESTRUCTURA"}]),"Estructura");
+  XLSX.utils.book_append_sheet(wb,hacerHoja("Estructura NQN",[{nombre:"Estructura NQN",grupo:"K) ESTRUCTURA NQN"}]),"Estructura NQN");
+  XLSX.writeFile(wb,`presupuesto_detalle_${meses[0]}_${meses[meses.length-1]}.xlsx`);
+}
+window.exportarPtoDetalleExcel=exportarPtoDetalleExcel;
 function exportTabla(){
   const t=document.getElementById("pTabla"),rows=[];
   t.querySelectorAll("tr").forEach(tr=>{
