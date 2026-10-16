@@ -1912,7 +1912,10 @@ window.togglePtoDetalle=togglePtoDetalle;
     ce.innerHTML=`<b style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.65">Config Pto</b><label style="display:inline-flex;align-items:center;gap:5px">Fecha base (inicio de ejercicio)<select onchange="window.cfgChange('fechaBase',this.value)" style="padding:4px 6px" ${editable?"":"disabled"}>${opcionesBase}</select></label><label style="display:inline-flex;align-items:center;gap:5px">TC respaldo oficial<input title="Solo se usa si falta la cotización del último día del mes de la vigencia"  type="number" step="0.01" value="${tcOf}" onchange="window.cfgChange('tcOf',this.value)" style="width:92px;padding:3px 6px" ${editable?"":"disabled"}></label><label style="display:inline-flex;align-items:center;gap:5px">blue<input type="number" step="0.01" value="${tcBill}" onchange="window.cfgChange('tcBill',this.value)" style="width:92px;padding:3px 6px" ${editable?"":"disabled"}></label>`;
   }}
   let rows=CONFIG_PTO.filter(c=>(!bloque||c.grupo===bloque)&&(!resp||c.responsable===resp));
-  if(filtro==="datos") rows=rows.filter(c=>{const v=ptoVigente(c.key,ultimo);return (v&&v.pto)||Object.values(c.serie).some(s=>s[3]!==0);});
+  // "Con presupuesto o gasto": 2026-10-16 (a pedido de Micaela) mira SOLO los meses del periodo elegido
+  // (Desde/Hasta) -- antes miraba toda la serie cargada (historico desde 2022), y cuentas sin Pto ni gasto en el
+  // periodo seguian apareciendo por algun movimiento viejo.
+  if(filtro==="datos") rows=rows.filter(c=>meses.some(m=>{const v=ptoVigente(c.key,m);if(v&&Math.abs(+v.pto||0)>0.5)return true;const s=c.serie[m];return !!(s&&s.some(x=>Math.abs(+x||0)>0.005));}));
   const rowsPreCol=rows; // antes de aplicar los filtros tipo Excel de columna -- el desplegable de
                           // cada columna tiene que mostrar siempre todos los valores posibles, no
                           // solo los que quedan despues de filtrar esa misma columna.
