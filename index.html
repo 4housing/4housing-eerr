@@ -1521,9 +1521,32 @@ function renderPtoApertura(){
   const tienePtoPorConcepto=!!ptoConceptosTodos.length;
   const ovCuenta=OVERRIDES[cuenta];
   const baseCuenta=ovCuenta?ovCuenta.base:"mensual";
+  // 2026-10-16 (a pedido de Micaela): la fila Pto es el Pto de Presupuesto·Estructura de las cuentas reales
+  // de esta apertura en el/los bloque(s) que se ven -- con Grupo "Todos", Estructura + Estructura NQN (antes,
+  // en una cuenta sin apertura por concepto como Seguridad Alarmas, tomaba solo la de Estructura). Como
+  // ptoVigente ya devuelve la suma de los conceptos en las cuentas que la tienen (#74), Alquileres sigue dando
+  // PRINCI+BERGER+Expensas (+SPWORK en "Todos"). Los conceptos con Pto que no estan asignados a ninguna cuenta
+  // se suman aparte, como antes. Antes de la primera vigencia la fila queda vacia (igual que antes).
+  // "Cta Part Socios" (filtro por socio, no por bloque) sigue con el calculo por concepto de siempre.
+  const filtroFnPto=APERTURA_FILTRO_FN[cuenta];
+  const realesPto=new Set((cuentaRealSel?[cuentaRealSel]:(APERTURA_CUENTAS_MAP[cuenta]||[cuenta])).map(normApertura));
+  const gruposPto=(grupoSel?[grupoSel]:["K) ESTRUCTURA","K) ESTRUCTURA NQN"]).map(normApertura);
+  const keysPto=filtroFnPto?[]:CONFIG_PTO.filter(c=>realesPto.has(normApertura(c.cuenta))&&gruposPto.includes(normApertura(c.grupo))).map(c=>c.key);
+  const conceptosSueltos=filtroFnPto?[]:ptoConceptos.filter(k=>!keyCuentaDeConcepto(cuenta,k));
+  const primerDesdeKey=key=>{
+    const cs=conceptosSumadosDeKey(key);
+    const ds=cs.length?cs.flatMap(({cta,con})=>(((APERTURA_PTO[cta]||{})[con]||{}).historial||[]).map(e=>e.desde)):((OVERRIDES[key]||{}).historial||[]).map(e=>e.desde);
+    return ds.length?ds.reduce((a,b)=>a<b?a:b):null;
+  };
   const ptoMesFn=m=>{
-    if(tienePtoPorConcepto) return ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMesMoneda(cuenta,k,m,cur),0);
-    const v=ptoEnMesMoneda(cuenta,m,cur); return baseCuenta==="anual"?v/12:v;
+    if(filtroFnPto) return tienePtoPorConcepto?ptoConceptos.reduce((s,k)=>s+aperturaPtoEnMesMoneda(cuenta,k,m,cur),0):0;
+    let t=0;
+    keysPto.forEach(key=>{
+      const pd=primerDesdeKey(key); if(!pd||m<pd) return;
+      const v=ptoEnMesMoneda(key,m,cur); t+=((OVERRIDES[key]||{}).base==="anual"&&!conceptosSumadosDeKey(key).length)?v/12:v;
+    });
+    conceptosSueltos.forEach(k=>{ t+=aperturaPtoEnMesMoneda(cuenta,k,m,cur); });
+    return t;
   };
   const ptoPorMes=mesesSel.map(ptoMesFn);
   const totCells=colTot.map((v,i)=>{
