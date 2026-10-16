@@ -2618,6 +2618,14 @@ async function sbFetchAllPublic(table, orderCol){
   }
   return all;
 }
+function normalizarPeriodoFacpce(p){
+  if(p==null) return null;
+  if(p instanceof Date) return p.getUTCFullYear()+"-"+String(p.getUTCMonth()+1).padStart(2,"0");
+  const m=String(p).trim().match(/^(\d{4})[-\/.\s]?(\d{1,2})(?!\d)/);
+  if(!m) return null;
+  const mes=+m[2]; if(mes<1||mes>12) return null;
+  return m[1]+"-"+String(mes).padStart(2,"0");
+}
 async function cargarDiccionarioSupabase(){
   try{
     const [ofic,bill,facpce]=await Promise.all([
@@ -2640,9 +2648,13 @@ async function cargarDiccionarioSupabase(){
       billMap[r.fecha]=val; if(!billLast||r.fecha>billLast) billLast=r.fecha;
       billRaw[r.fecha]={compra:c, venta:v};
     });
+    // 2026-10-16: el periodo se lee en cualquier formato ("202607", "2026-07", "2026/07", "2026-07-01", numero
+    // 202607) -- antes se asumia "AAAAMM" y un periodo guardado como "2026-07" quedaba como "2026--0": no se
+    // reconocia y el AXI se quedaba en el ultimo indice con el formato viejo (Micaela vio el Pto plano desde jul-26
+    // aunque en la tabla de Compras estaban cargados jul/ago/sep).
     facpce.forEach(r=>{
       if(r.valor==null) return;
-      const p=String(r.periodo), ym=p.slice(0,4)+'-'+p.slice(4,6);
+      const ym=normalizarPeriodoFacpce(r.periodo); if(!ym) return;
       facpceMap[ym]=+r.valor; if(!facpceLast||ym>facpceLast) facpceLast=ym;
     });
     HIST_CAMBIARIO={ofic:oficMap, bill:billMap, facpce:facpceMap, ofic_last:oficLast, bill_last:billLast, facpce_last:facpceLast, oficRaw, billRaw};
@@ -4998,6 +5010,11 @@ async function onCargarInformeCrudo(file){
     return;
   }
   await cargarTodoDesdeSupabase();
+  // 2026-10-16: el diccionario (TC oficial/billete e indice FACPCE de la tabla de Compras) se lee de Supabase al
+  // abrir la app -- antes solo se leia al cargar un crudo o al abrir la solapa Diccionario, y mientras tanto la app
+  // usaba la copia embebida de respaldo (FACPCE hasta jul-26): el Pto ajustado por inflacion quedaba plano desde
+  // ago-26 aunque ago/sep ya estaban cargados en Supabase (lo vio Micaela).
+  try{ await cargarDiccionarioSupabase(); }catch(e){ console.warn("diccionario:",e); }
   if(loadAperturaPtoSeed()) saveAperturaPto();
   if(migrarPtoEnergiaAux02()) saveAperturaPto();
   { const na=normalizarVigenciasApertura(); if(na.cambio) saveAperturaPto(); if(na.flag) saveOverrides(); }
