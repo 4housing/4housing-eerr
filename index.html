@@ -982,10 +982,56 @@ function debugGruposPorConcepto(cuenta){
    Pais, Gastos Mano de Obra, ART y Patentes). Se rearma solo cuando cambia la lista, asi que una cuenta oculta
    reaparece sola apenas un crudo trae movimientos suyos. "⚠ Estructura sin detalle" se muestra siempre (es el
    chequeo de cobertura). Si todavia no hay datos cargados, se muestran todas, para no dejar el desplegable vacio. */
+/* 2026-10-16 (a pedido de Micaela): orden fijo de las cuentas, el mismo para Estructura y Estructura NQN.
+   Solo cambia el ORDEN en que se muestran -- no se agrega, borra ni renombra ninguna cuenta ni se toca
+   ningun importe. Se usa en dos lugares:
+     - Presupuesto·Estructura (#pTabla): es el orden por defecto (sin orden por columna elegido). Las
+       cuentas que no estan en esta lista (ej. ART, Materiales, Medicina Laboral Prepaga, IMP·/SUE·) van
+       al final, con el criterio de antes (Pto del ultimo mes, de mayor a menor).
+     - Desplegable de Apertura de Estructura (#paCuenta): las cuentas de Apertura agrupan varias cuentas
+       reales (ej. "Rodados" = Mantenimiento Rodados + Seguro/Patente Automotor RODADOS + Multas...), asi
+       que cada una va en la posicion de la primera de sus cuentas reales que aparece en la lista. "Cta Part
+       Socios" sigue unificada y queda primera. Las que no tienen ninguna cuenta real en la lista van al final,
+       en el orden de antes.
+   Se compara sin tildes ni mayusculas ("Comisiones alquileres" = "Comisiones Alquileres"). */
+const ORDEN_CUENTAS_ESTRUCTURA=["Cta part Pedretti Gustavo","Cta part Seoane Leandro","Cta part Spinetto Pablo",
+  "Cta part Seoane Micaela","Alquileres","Seguridad Alarmas","Energía Electrica","Recoleccion Residuos",
+  "Mantenimiento Bs de Uso","Movimiento Modulos Grua","Gas","Muebles y Utiles (V. Orig)",
+  "Mantenimiento Muebles y Útiles","Herramientas (V. Orig)","Mantenimiento Herramientas","EPP",
+  "Gastos varios Taller","Mantenimiento Rodados","Seguro Automotor RODADOS","Patente Automotor RODADOS","Multas",
+  "Movilidad Combustible","Gasto comercial","Gastos de Publicidad","Gastos de representación","Food & Bev",
+  "Recursos Humanos","Gastos de Asesoramiento y Capacitacion","Seguros","Seguro Bienes de Uso",
+  "Seguro Accidentes Personales","Sistemas","Telefonos","Comisiones alquileres","Honorarios SIG & S&G",
+  "Honorarios Arquitectos","Honorarios Contables","Honorarios Escribania","Honorarios Legales","Honorarios Otros",
+  "Servicios Profesionales","Gs varios oficina","Librería e Imprenta","Mensajeria","Gs limpieza","Patentes",
+  "Gastos generales","Gastos Bancarios","Impuestos y Tasas","Impuesto Pais","Int y Rec Impositivos",
+  "Intereses Perdidos","Juicios Perdidos","Gastos Extraordinarios","Ajustes Cuentas Corrientes"];
+function normOrdenCuenta(s){
+  return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();
+}
+const POS_ORDEN_CUENTAS=new Map(ORDEN_CUENTAS_ESTRUCTURA.map((c,i)=>[normOrdenCuenta(c),i]));
+// Posicion de una cuenta real en el orden fijo (Infinity si no esta).
+function posOrdenCuenta(cuenta){
+  const p=POS_ORDEN_CUENTAS.get(normOrdenCuenta(cuenta));
+  return p==null?Infinity:p;
+}
+// Posicion de una cuenta de Apertura = la de la primera de sus cuentas reales que esta en el orden fijo.
+function posOrdenCuentaApertura(cuentaApertura){
+  const reales=APERTURA_CUENTAS_MAP[cuentaApertura]||[cuentaApertura];
+  return Math.min(posOrdenCuenta(cuentaApertura),...reales.map(posOrdenCuenta));
+}
+function ordenarCuentasApertura(lista){
+  const idx=new Map(APERTURA_CUENTAS.map((c,i)=>[c,i]));
+  return lista.slice().sort((a,b)=>{
+    const pa=posOrdenCuentaApertura(a), pb=posOrdenCuentaApertura(b);
+    if(pa!==pb) return pa<pb?-1:1;
+    return (idx.get(a)??0)-(idx.get(b)??0);
+  });
+}
 function poblarCuentasApertura(){
   const sel=document.getElementById("paCuenta"); if(!sel) return;
   const conDatos=APERTURA_CUENTAS.filter(c=>detalleAperturaCuenta(c).length>0);
-  const lista=conDatos.length?conDatos:APERTURA_CUENTAS.slice();
+  const lista=ordenarCuentasApertura(conDatos.length?conDatos:APERTURA_CUENTAS.slice());
   const firma=lista.join("\u241F");
   if(sel.dataset&&sel.dataset.firma===firma) return;
   const actual=sel.value;
@@ -1483,6 +1529,10 @@ window.togglePtoDetalle=togglePtoDetalle;
       const val=c=>PTO_SORT.col==="responsable"?iniciales(c.responsable):(PTO_SORT.col==="cuenta"?c.cuenta:(OVERRIDES[c.key]||{}).base);
       return String(val(x)).localeCompare(String(val(y)),'es',{numeric:true})*PTO_SORT.dir;
     }
+    // Sin orden por columna: orden fijo de cuentas (ORDEN_CUENTAS_ESTRUCTURA); las que no estan, al final
+    // por Pto del ultimo mes (el criterio de antes).
+    const ox=posOrdenCuenta(x.cuenta),oy=posOrdenCuenta(y.cuenta);
+    if(ox!==oy) return ox<oy?-1:1;
     const vx=ptoVigente(x.key,ultimo),vy=ptoVigente(y.key,ultimo);
     return (vy?vy.pto:0)-(vx?vx.pto:0);
   });
@@ -2001,6 +2051,25 @@ async function guardarTodoEnSupabase(){
   ]);
 }
 window.guardarTodoEnSupabase=guardarTodoEnSupabase;
+/* 2026-10-16 (a pedido de Micaela): cuentas que se sacan de Presupuesto·Estructura. "Seguro Automotor"
+   (Estructura) es una cuenta vieja: con el crudo abr-25..ago-26 no tiene ningun movimiento y su Pto es 0 (el
+   gasto real va a "Seguro Automotor RODADOS"). Solo se saca si de verdad esta vacia (ningun mes con importe
+   y Pto 0 en todas sus vigencias), asi no se pierde nada ni se descuadra Presupuesto contra el Estado de
+   Resultados. Si algun dia un crudo le trae movimientos, agregarCuentasNuevasAConfigPto la vuelve a
+   agregar (y lo avisa en el mensaje de la carga). Si no esta vacia, no se toca y se avisa en la consola. */
+const PTO_CUENTAS_ELIMINADAS=[{cuenta:"Seguro Automotor",grupo:"K) ESTRUCTURA"}];
+function quitarCuentasPtoEliminadas(){
+  PTO_CUENTAS_ELIMINADAS.forEach(({cuenta,grupo})=>{
+    const i=CONFIG_PTO.findIndex(c=>c.cuenta===cuenta&&c.grupo===grupo);
+    if(i<0) return;
+    const c=CONFIG_PTO[i];
+    const conImporte=Object.values(c.serie||{}).some(v=>(v||[]).some(x=>Math.abs(+x||0)>0.005));
+    const conPto=((OVERRIDES[c.key]||{}).historial||[]).some(e=>Math.abs(+e.pto||0)>0.005);
+    if(conImporte||conPto){ console.warn("Presupuesto: no se saca \""+cuenta+"\" porque tiene movimientos o Pto cargado."); return; }
+    CONFIG_PTO.splice(i,1);
+    delete OVERRIDES[c.key];
+  });
+}
 async function cargarTodoDesdeSupabase(){
   if(!sbClient) return false;
   const [d,cp,pd,ov,pov,pc,poc,ppf,pman,cav,hl,tco,apd,apo,appto,apd2,apoAux0N,apet]=await Promise.all([
@@ -2014,6 +2083,7 @@ async function cargarTodoDesdeSupabase(){
   if(cp&&cp.length){ CONFIG_PTO.length=0; cp.forEach(c=>CONFIG_PTO.push(c)); hubo=true; }
   if(pd){ Object.assign(PROJ_DATA,pd); PROJ_DATA.meses=completarMeses(PROJ_DATA.meses); hubo=true; }
   if(ov){ Object.assign(OVERRIDES,ov); hubo=true; }
+  quitarCuentasPtoEliminadas();
   if(pov){ PROJ_OV.proj=pov.proj||{}; PROJ_OV.row=pov.row||{}; hubo=true; }
   if(pc){ PROY_CTRL.meses=completarMeses(pc.meses||[]); PROY_CTRL.proyectos=pc.proyectos||{}; hubo=true; }
   if(poc){ Object.assign(PROY_CTRL_OC,poc); hubo=true; }
