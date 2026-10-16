@@ -1175,6 +1175,7 @@ function etiquetaFiltroApertura(cuenta){ return APERTURA_FILTRO_FN[cuenta]?"Soci
 // Micaela: todas las cuentas reales con algo de Grupo Estructura/NQN en APERTURA_ESTRUCTURA_TOTAL que
 // TODAVÍA no están mapeadas a ninguna Apertura -- ver detalleAperturaCuenta más abajo.
 const APERTURA_COBERTURA_CUENTA="⚠ Estructura sin detalle";
+const APERTURA_SIN_INVERSION=new Set(["Mantenimiento Bs de Uso"]); // ver detalleAperturaCuenta
 function detalleAperturaCuenta(cuenta){
   if(cuenta===APERTURA_COBERTURA_CUENTA){
     return Object.keys(APERTURA_ESTRUCTURA_TOTAL)
@@ -1192,7 +1193,11 @@ function detalleAperturaCuenta(cuenta){
   // como antes -- ahi el analisis es justamente "esto se clasifico como Estructura o como Inversion". Siguen
   // incluidas todas sus cuentas contables (ej. Muebles y Utiles (No Usar) y (AJ RT 6)); P) PROVEEDORES y
   // Q) AJUSTES CTAS siguen afuera (APERTURA_GRUPOS_PERMITIR).
-  const gruposEstructura=["K) ESTRUCTURA","K) ESTRUCTURA NQN",...(APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta]?["M) INVERSIONES"]:[])].map(normApertura);
+  // 2026-10-16 (a pedido de Micaela): Mantenimiento Bs de Uso vuelve a ser SOLO Estructura / Estructura NQN
+  // ("de aca sacaria Inversiones, porque genera confusion"; inversion + mantenimiento se va a ver aparte mas
+  // adelante). Las otras cuentas de bienes de uso siguen con Inversion hasta que ella lo decida.
+  const conInversion=APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta]&&!APERTURA_SIN_INVERSION.has(cuenta);
+  const gruposEstructura=["K) ESTRUCTURA","K) ESTRUCTURA NQN",...(conInversion?["M) INVERSIONES"]:[])].map(normApertura);
   const todo=(APERTURA_DETALLE[cuenta]||[]).filter(t=>gruposEstructura.includes(normApertura(t.grupo)));
   const permitir=APERTURA_GRUPOS_PERMITIR[cuenta];
   if(permitir&&permitir.length) return todo.filter(t=>permitir.some(g=>normApertura(g)===normApertura(t.grupo)));
