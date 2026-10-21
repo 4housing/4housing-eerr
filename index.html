@@ -234,7 +234,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   <span class="badge">✓ validado vs TD · AXI ancla abr-26 · sin rezago</span>
 </header>
 <div class="updbar"><button class="btn updbtn" id="updRawBtn" style="background:#3d5a80">⟳ Cargar informe Tango (crudo)</button><input type="file" id="updRawFile" accept=".xlsx" style="display:none"><span id="updMsg" class="updmsg">Subí el informe crudo de Consultas Externas de Tango (18 columnas), tal cual se descarga — es el único archivo que alimenta esta app.</span></div>
-<div class="updbar"><div class="lock" style="margin-right:0"><span id="histLockState">Histórico: sin bloqueo</span><label for="histLockMes" style="font-size:12.5px;color:var(--muted)">Bloquear hasta:</label><select id="histLockMes"></select><input id="histLockKey" class="lockkey" type="password" placeholder="Clave"><button class="lockbtn" id="histLockBtn">Aplicar</button></div><span id="histLockMsg" class="updmsg">Elegí el último mes que querés dejar fijo (por ej. mar-25), ingresá la clave y hacé clic en "Aplicar": ese mes y todos los anteriores quedan protegidos — ninguna carga posterior del crudo (EERR, Presupuesto·Estructura ni Proyectos/CMV) va a volver a tocarlos ni borrarlos. El desplegable siempre incluye el último mes cargado. Mientras no hagas clic en "Aplicar", ningún cambio queda guardado.</span></div>
+<div class="updbar"><div class="lock" style="margin-right:0"><span id="histLockState">Histórico: sin bloqueo</span><label for="histLockMes" style="font-size:12.5px;color:var(--muted)">Bloquear hasta:</label><select id="histLockMes"></select><button class="lockbtn" id="histLockBtn">Aplicar</button></div><span id="histLockMsg" class="updmsg">Elegí el último mes que querés dejar fijo (por ej. mar-25), hacé clic en "Aplicar" (pide confirmación): ese mes y todos los anteriores quedan protegidos — ninguna carga posterior del crudo (EERR, Presupuesto·Estructura ni Proyectos/CMV) va a volver a tocarlos ni borrarlos. El desplegable siempre incluye el último mes cargado. Mientras no hagas clic en "Aplicar", ningún cambio queda guardado.</span></div>
 
 <div id="view-eerr">
   <div class="controls">
@@ -288,7 +288,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
     </div>
     <div id="ptoCfg" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 2px"></div>
     <div class="kpis" id="pKpis"></div>
-    <div class="bar"><div class="lock"><span id="lockState">Edición bloqueada</span><input id="lockKey" class="lockkey" type="password" placeholder="Clave" style="display:none"><button class="lockbtn" id="btnLock">Desbloquear (Gerencia)</button></div><button class="btn" id="btnCsv">Descargar Excel</button><button class="btn" id="btnPtoXlsx" title="Excel con el Pto mes a mes: hojas Total, Estructura y Estructura NQN, en el orden de los informes, con la apertura de cada cuenta agrupada (+/− para expandir o contraer)">Exportar Pto (Excel)</button><button class="btn" id="btnPdf">Imprimir / PDF</button></div>
+    <div class="bar"><div class="lock"><span id="lockState">Edición bloqueada</span><button class="lockbtn" id="btnLock">Habilitar edición</button></div><button class="btn" id="btnCsv">Descargar Excel</button><button class="btn" id="btnPtoXlsx" title="Excel con el Pto mes a mes: hojas Total, Estructura y Estructura NQN, en el orden de los informes, con la apertura de cada cuenta agrupada (+/− para expandir o contraer)">Exportar Pto (Excel)</button><button class="btn" id="btnPdf">Imprimir / PDF</button></div>
     <div class="table-wrap pto-wrap"><table id="pTabla"></table></div>
     <div class="foot" id="pFoot"></div>
   </div>
@@ -342,7 +342,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
       <div class="ctl"><label>Inversión</label><label class="invchk"><input type="checkbox" id="cmvExclInv"> Excluir del costo</label></div>
     </div>
     <div class="bar">
-      <div class="lock"><span id="cmvLockState">Edición bloqueada</span><input id="cmvLockKey" class="lockkey" type="password" placeholder="Clave" style="display:none"><button class="lockbtn" id="cmvLockBtn">Desbloquear (Gerencia)</button></div>
+      <div class="lock"><span id="cmvLockState">Edición bloqueada</span><button class="lockbtn" id="cmvLockBtn">Habilitar edición</button></div>
       <button class="btn" id="cmvCsv">Descargar Excel</button>
       <button class="btn" id="cmvPdf">Imprimir / PDF</button>
     </div>
@@ -603,10 +603,10 @@ function aplicarPermisosEerr(){
   // Crudo de Tango (alimenta todo) e histórico bloqueado: Editar en Estado de Resultados.
   ocultar(id("updRawBtn")&&id("updRawBtn").closest(".updbar"),!puedeEditar("eerr"));
   ocultar(id("histLockState")&&id("histLockState").closest(".updbar"),!puedeEditar("eerr"));
-  // Presupuesto: el desbloqueo con clave de Gerencia solo para quien tiene Editar en Presupuesto.
-  if(!puedeEditar("pto")){ ocultar(id("btnLock"),true); ocultar(id("lockKey"),true); if(typeof editable!=="undefined"&&editable) setLock(false); const st=id("lockState"); if(st) st.textContent="Solo lectura"; }
+  // Presupuesto: "Habilitar edición" solo para quien tiene Editar en Presupuesto.
+  if(!puedeEditar("pto")){ ocultar(id("btnLock"),true); if(typeof editable!=="undefined"&&editable) setLock(false); const st=id("lockState"); if(st) st.textContent="Solo lectura"; }
   // Proyectos · CMV: desbloqueo y saldo anterior.
-  if(!puedeEditar("cmv")){ ocultar(id("cmvLockBtn"),true); ocultar(id("cmvLockKey"),true); const st=id("cmvLockState"); if(st) st.textContent="Solo lectura"; ocultar(id("saldoAntBtn")&&id("saldoAntBtn").parentNode,true); if(id("saldoAntBtn")) id("saldoAntBtn").disabled=true; }
+  if(!puedeEditar("cmv")){ ocultar(id("cmvLockBtn"),true); const st=id("cmvLockState"); if(st) st.textContent="Solo lectura"; ocultar(id("saldoAntBtn")&&id("saldoAntBtn").parentNode,true); if(id("saldoAntBtn")) id("saldoAntBtn").disabled=true; }
   // Control Proyectos: Tango (verificación), OC Emitidas y OC Pend. de Facturar.
   ["pyCrudoBtn","pyOcBtn","pyPfBtn"].forEach(b=>{ ocultar(id(b),!puedeEditar("proy")); if(id(b)) id(b).disabled=!puedeEditar("proy"); });
   // Diccionario: tabla TC por comprobante.
@@ -635,22 +635,19 @@ window.showPtoSub=showPtoSub;
 
 /* ===== Presupuesto ===== */
 let editable=false;
-const CLAVE_GERENCIA="4housing";
+// 2026-10-21: sin clave en el codigo (el index.html es publico). Quien tiene "Editar" en la solapa
+// (permisos del portal) ve el boton "Habilitar edicion"; el boton queda como resguardo contra cambios sin querer.
 function setLock(s){
   editable=s;
-  const st=document.getElementById("lockState"),b=document.getElementById("btnLock"),inp=document.getElementById("lockKey");
-  if(st)st.textContent=editable?"Edición habilitada (Gerencia)":"Edición bloqueada";
-  if(b){b.textContent=editable?"Bloquear":"Desbloquear (Gerencia)";b.classList.toggle("open",editable);}
-  if(inp){inp.style.display="none";inp.value="";inp.placeholder="Clave";}
+  const st=document.getElementById("lockState"),b=document.getElementById("btnLock");
+  if(st)st.textContent=editable?"Edición habilitada":"Edición bloqueada";
+  if(b){b.textContent=editable?"Bloquear":"Habilitar edición";b.classList.toggle("open",editable);}
   renderPto();
 }
 function onLockClick(){
   if(editable){setLock(false);return;}
   if(!puedeEditar("pto")) return;
-  const inp=document.getElementById("lockKey");
-  if(inp.style.display==="none"){inp.style.display="";inp.focus();return;}
-  if(inp.value===CLAVE_GERENCIA)setLock(true);
-  else{inp.value="";inp.placeholder="Clave incorrecta";inp.focus();}
+  setLock(true);
 }
 /* Presupuesto por vigencias: cada cuenta tiene un historial [{desde:"AAAA-MM", pto}] en vez de un
    solo valor -- permite modificar el Pto a mitad de año (ej. se corta un alquiler) sin perder el
@@ -874,7 +871,6 @@ async function initPto(){
   { const bx=document.getElementById("btnPtoXlsx"); if(bx) bx.addEventListener("click",exportarPtoDetalleExcel); }
   document.getElementById("btnPdf").addEventListener("click",()=>window.print());
   document.getElementById("btnLock").addEventListener("click",onLockClick);
-  document.getElementById("lockKey").addEventListener("keydown",e=>{if(e.key==="Enter")onLockClick();});
   setLock(false);
 }
 /* ===== Historial Pto: registro de todos los cambios de vigencia, en su propia pestaña (a pedido
@@ -895,7 +891,7 @@ function initPtoHist(){
   sel.addEventListener("change",()=>{poblarBloqueHist();actualizarConceptoHist();renderPtoHist();});
   bSel.addEventListener("change",()=>{actualizarConceptoHist();});
   document.getElementById("phAddBtn").addEventListener("click",()=>{
-    if(!editable){alert('Desbloqueá la edición en Presupuesto·Estructura primero (botón "Desbloquear (Gerencia)").');return;}
+    if(!editable){alert('Desbloqueá la edición en Presupuesto·Estructura primero (botón "Habilitar edición").');return;}
     const key=bSel.value; if(!sel.value||!key){alert("Elegí una cuenta (y el bloque).");return;}
     const desde=document.getElementById("phMes").value||fechaBasePto();
     const ptoInp=document.getElementById("phPto");
@@ -1129,7 +1125,7 @@ function renderPtoHist(){
   const sel=document.getElementById("phCuenta"); if(!sel) return;
   actualizarMesHist();
   const filtroCuenta=sel.value; // nombre de cuenta ("" = todas): se ven TODOS sus bloques + su apertura
-  document.getElementById("phLockNote").textContent=editable?"Edición habilitada (Gerencia)":"Edición bloqueada (ver Presupuesto·Estructura para desbloquear)";
+  document.getElementById("phLockNote").textContent=editable?"Edición habilitada":"Edición bloqueada (habilitala en Presupuesto·Estructura)";
   const cuentasPorKey={}; CONFIG_PTO.forEach(c=>cuentasPorKey[c.key]=c);
   let filas=[];
   Object.keys(OVERRIDES).forEach(key=>{
@@ -2482,8 +2478,8 @@ function parseNum(s){s=String(s).trim().replace(/[^0-9.,\-]/g,'');if(!s||s==='-'
 function fmtTC(n){return (n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function valCur(arr,cur,ym){if(!arr)return 0;let v;if(cur===0)v=arr[0];else if(cur===1)v=arr[1];else if(cur===2)v=arr[2];else v=arr[0]*(PROJ_DATA.mult[ym]||1);return SIGN*v;}
 function convAnt(ars,cur){if(cur===0)return ars;if(cur===1)return CONV.oficial?ars/CONV.oficial:0;if(cur===2)return CONV.blue?ars/CONV.blue:0;return ars*CONV.axi_mult;}
-function setLockCMV(s){editableCMV=s;const st=document.getElementById("cmvLockState"),b=document.getElementById("cmvLockBtn"),inp=document.getElementById("cmvLockKey");if(st)st.textContent=editableCMV?"Edici\u00f3n habilitada (Gerencia)":"Edici\u00f3n bloqueada";if(b){b.textContent=editableCMV?"Bloquear":"Desbloquear (Gerencia)";b.classList.toggle("open",editableCMV);}if(inp){inp.style.display="none";inp.value="";inp.placeholder="Clave";}renderCMV();}
-function onLockCMV(){if(editableCMV){setLockCMV(false);return;}if(!puedeEditar("cmv"))return;const inp=document.getElementById("cmvLockKey");if(inp.style.display==="none"){inp.style.display="";inp.focus();return;}if(inp.value===CLAVE_GERENCIA)setLockCMV(true);else{inp.value="";inp.placeholder="Clave incorrecta";inp.focus();}}
+function setLockCMV(s){editableCMV=s;const st=document.getElementById("cmvLockState"),b=document.getElementById("cmvLockBtn"),inp=null;if(st)st.textContent=editableCMV?"Edici\u00f3n habilitada":"Edici\u00f3n bloqueada";if(b){b.textContent=editableCMV?"Bloquear":"Habilitar edici\u00f3n";b.classList.toggle("open",editableCMV);}renderCMV();}
+function onLockCMV(){if(editableCMV){setLockCMV(false);return;}if(!puedeEditar("cmv"))return;setLockCMV(true);}
 function exportTablaGen(tid,fname){const t=document.getElementById(tid),rows=[];t.querySelectorAll("tr").forEach(tr=>{const head=tr.parentNode.tagName==="THEAD";let tds="";[...tr.children].forEach(td=>{const s=td.querySelector("select"),inp=td.querySelector("input");let v;if(s)v=s.value;else if(inp)v=inp.type==="checkbox"?(inp.checked?"S\u00ed":""):inp.value;else v=td.innerText.replace(/\s+/g," ").trim();let st="border:.5px solid #d8cba6;padding:4px 7px;";if(head)st+="background:#EDEBE1;font-weight:bold;text-align:center;";else st+=td.classList.contains("fzc")?"text-align:left;":"text-align:right;";const tag=head?"th":"td";tds+=`<${tag} style="${st}">${v}</${tag}>`;});rows.push(`<tr>${tds}</tr>`);});const html='<html><head><meta charset="utf-8"></head><body><table style="border-collapse:collapse;font-family:Calibri,Arial;font-size:11px">'+rows.join("")+'</table></body></html>';const blob=new Blob(['\uFEFF'+html],{type:"application/vnd.ms-excel"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=fname+".xls";document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);}
 function renderCMV(){
   renderCMVAvisos();
@@ -2547,7 +2543,6 @@ async function initCMV(){
     saveProjOv();renderCMV();
   });
   document.getElementById("cmvLockBtn").addEventListener("click",onLockCMV);
-  document.getElementById("cmvLockKey").addEventListener("keydown",e=>{if(e.key==="Enter")onLockCMV();});
   document.getElementById("cmvCsv").addEventListener("click",()=>exportTablaGen("cmvTabla","proyectos_cmv"));
   document.getElementById("cmvPdf").addEventListener("click",()=>window.print());
   setLockCMV(false);
@@ -2575,7 +2570,6 @@ function initEerrUI(){
     exportTablaGen("tabla",`estado_resultados_${curLbl}_${desde}_${hasta}`);
   });
   document.getElementById("histLockBtn").addEventListener("click",onHistLockAplicar);
-  document.getElementById("histLockKey").addEventListener("keydown",e=>{if(e.key==="Enter")onHistLockAplicar();});
   renderHistLockUI();
   try{recompute();}catch(e){console.warn("eerr:",e);}
 }
@@ -2687,11 +2681,11 @@ function renderHistLockUI(){
 }
 function onHistLockAplicar(){
   if(!puedeEditar("eerr")) return;
-  const sel=document.getElementById("histLockMes"),inp=document.getElementById("histLockKey");
-  if(inp.value!==CLAVE_GERENCIA){ inp.value=""; inp.placeholder="Clave incorrecta"; inp.focus(); return; }
+  const sel=document.getElementById("histLockMes");
+  const txt=sel.value?`¿Bloquear el histórico hasta ${mesLabel(sel.value)} inclusive? Ese mes y los anteriores no se van a volver a modificar con nuevas cargas del crudo.`:"¿Quitar el bloqueo del histórico?";
+  if(!confirm(txt)) return;
   HIST_LOCK.hasta=sel.value||null;
   guardarClave('HIST_LOCK',HIST_LOCK);
-  inp.value=""; inp.placeholder="Clave";
   renderHistLockUI();
 }
 /* Correccion manual del USD Billete para movimientos "ContaParam" puntuales, por Nro. de
