@@ -2157,15 +2157,18 @@ function downloadCSV(){
    - Las cuentas que son suma de su apertura llevan debajo sus conceptos, agrupados con el esquema de Excel
      (botones +/− y 1/2/3 del margen) para expandir o contraer. */
 function exportarPtoDetalleExcel(){
-  if(typeof XLSX==="undefined"){ alert("No está disponible la librería de Excel."); return; }
   const allm=pMonths(), i0=+document.getElementById("pDesde").value, i1=+document.getElementById("pHasta").value;
   const meses=allm.slice(Math.min(i0,i1),Math.max(i0,i1)+1);
   const cur=+document.getElementById("pMoneda").value||0, fb=fechaBasePto();
+  // Respeta los filtros de la pantalla: Responsable (solo sus cuentas) y Bloque (su hoja va primero;
+  // Sueldos/Impuestos exportan solo ese bloque). Moneda y meses ya se tomaban de los filtros.
+  const resp=document.getElementById("pResp").value, bloqueSel=document.getElementById("pBloque").value;
+  const selTxt=id=>{const s=document.getElementById(id); return s&&s.selectedIndex>=0?s.options[s.selectedIndex].text:"";};
   const r0=v=>Math.round((+v||0)*100)/100;
   const ordAp=(cta,con)=>{ const o=APERTURA_ORDEN[cta]||[]; const i=o.indexOf(con); return i<0?9999:i; };
   const filasBloque=g=>{
     const out=[]; const tot=meses.map(()=>0);
-    CONFIG_PTO.filter(c=>c.grupo===g).sort((a,b)=>{ const pa=posOrdenCuenta(a.cuenta), pb=posOrdenCuenta(b.cuenta); return pa!==pb?(pa<pb?-1:1):a.cuenta.localeCompare(b.cuenta,'es'); }).forEach(c=>{
+    CONFIG_PTO.filter(c=>c.grupo===g&&(!resp||c.responsable===resp)).sort((a,b)=>{ const pa=posOrdenCuenta(a.cuenta), pb=posOrdenCuenta(b.cuenta); return pa!==pb?(pa<pb?-1:1):a.cuenta.localeCompare(b.cuenta,'es'); }).forEach(c=>{
       const vals=meses.map(m=>m>=fb?r0(ptoMesCuentaKey(c.key,m,cur)):0);
       if(!vals.some(v=>Math.abs(v)>0.004)) return;
       vals.forEach((v,i)=>tot[i]+=v);
@@ -2180,41 +2183,193 @@ function exportarPtoDetalleExcel(){
   };
   const hdr=["Cuenta","Concepto (apertura)","Resp.","Base",...meses.map(m=>mesLabel(m)),"Total período"];
   const sumar=a=>a.reduce((x,y)=>x+y,0);
-  const fmtNum='#,##0;[Red]-#,##0;"–"';
+  const E=XLSX_EST, nM=meses.length, nCols=4+nM+1;
   const hacerHoja=(titulo,secciones)=>{
-    const aoa=[[`Presupuesto · ${titulo} · en ${MONEDA_NOMBRE[cur]} · ${mesLabel(meses[0])} a ${mesLabel(meses[meses.length-1])}`],[`Desde la fecha base (${mesLabel(fb)}) / primera vigencia de cada cuenta. Base anual repartida 1/12 por mes. Usá los botones +/− (o 1/2/3) del margen izquierdo para expandir o contraer la apertura.`],[],hdr];
-    const niveles=[0,0,0,0]; const negritas=[3];
+    const cel=(v,st)=>({v,s:st});
+    const rows=[
+      {cells:[cel(`Presupuesto · ${titulo} · ${resp?resp:"Todos los responsables"} · en ${MONEDA_NOMBRE[cur]} · ${mesLabel(meses[0])} a ${mesLabel(meses[meses.length-1])}`,E.title)],ht:22},
+      {cells:[cel(`Desde la fecha base (${mesLabel(fb)}) / primera vigencia de cada cuenta. Base anual repartida 1/12 por mes. Usá los botones +/− (o 1/2) del margen izquierdo para expandir o contraer la apertura. Rojo = negativo.`,E.sub)]},
+      {cells:hdr.map((h,i)=>cel(h,i===hdr.length-1?E.headD:E.head)),ht:30}
+    ];
     const totGral=meses.map(()=>0);
     const conSecciones=secciones.length>1;
     secciones.forEach(({nombre,grupo})=>{
       const {out,tot}=filasBloque(grupo);
-      if(conSecciones){ aoa.push([nombre]); niveles.push(0); negritas.push(aoa.length-1); }
+      if(conSecciones) rows.push({cells:[cel(nombre,E.sec),...Array(nCols-1).fill(0).map(()=>cel("",E.sec))]});
       const base=conSecciones?1:0;
       out.forEach(f=>{
-        const etq=f.tipo==="concepto"?"↳ "+(PH_BLOQUE_LBL[f.concepto]||f.concepto):f.concepto; // Energía/Food & Bev: el concepto es el bloque
-        aoa.push([f.tipo==="concepto"?"":f.cuenta,etq,f.resp,f.base,...f.vals,r0(sumar(f.vals))]);
-        niveles.push(f.tipo==="concepto"?base+1:base);
+        const det=f.tipo==="concepto";
+        const etq=det?"↳ "+(PH_BLOQUE_LBL[f.concepto]||f.concepto):f.concepto; // Energía/Food & Bev: el concepto es el bloque
+        const tx=det?E.txtDet:E.txt, nu=det?E.numDet:E.num;
+        rows.push({cells:[cel(det?"":f.cuenta,tx),cel(etq,tx),cel(f.resp,tx),cel(f.base,tx),...f.vals.map(v=>cel(v,nu)),cel(r0(sumar(f.vals)),det?E.numDet:E.numTot)],level:det?base+1:base});
       });
       tot.forEach((v,i)=>totGral[i]+=v);
-      if(conSecciones){ aoa.push([`Total ${nombre}`,"","","",...tot.map(r0),r0(sumar(tot))]); niveles.push(0); negritas.push(aoa.length-1); aoa.push([]); niveles.push(0); }
+      if(conSecciones) rows.push({cells:[cel(`Total ${nombre}`,E.txtSec),cel("",E.txtSec),cel("",E.txtSec),cel("",E.txtSec),...tot.map(v=>cel(r0(v),E.numSec)),cel(r0(sumar(tot)),E.numSec)]});
     });
-    aoa.push(["TOTAL","","","",...totGral.map(r0),r0(sumar(totGral))]); niveles.push(0); negritas.push(aoa.length-1);
-    const ws=XLSX.utils.aoa_to_sheet(aoa);
-    ws["!rows"]=niveles.map(l=>l?{level:l}:{});
-    ws["!outline"]={above:true}; // la cuenta queda ARRIBA de su apertura
-    ws["!cols"]=[{wch:34},{wch:34},{wch:7},{wch:14},...meses.map(()=>({wch:13})),{wch:15}];
-    const rango=XLSX.utils.decode_range(ws["!ref"]);
-    for(let R=4;R<=rango.e.r;R++) for(let C=4;C<=rango.e.c;C++){ const ref=XLSX.utils.encode_cell({r:R,c:C}); if(ws[ref]&&typeof ws[ref].v==="number") ws[ref].z=fmtNum; }
-    return ws;
+    rows.push({cells:[cel("TOTAL",E.txtTot),cel("",E.txtTot),cel("",E.txtTot),cel("",E.txtTot),...totGral.map(v=>cel(r0(v),E.numTot)),cel(r0(sumar(totGral)),E.numTot)]});
+    const ult=xlsxColL(nCols-1);
+    return {name:titulo,cols:[34,34,22,14,...meses.map(()=>14),16],rows,freeze:{r:3,c:2},filter:{r0:2,c0:0,r1:rows.length-1,c1:nCols-1},merges:[`A1:${ult}1`,`A2:${ult}2`]};
   };
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,hacerHoja("Total",[{nombre:"Estructura",grupo:"K) ESTRUCTURA"},{nombre:"Estructura NQN",grupo:"K) ESTRUCTURA NQN"}]),"Total");
-  XLSX.utils.book_append_sheet(wb,hacerHoja("Estructura",[{nombre:"Estructura",grupo:"K) ESTRUCTURA"}]),"Estructura");
-  XLSX.utils.book_append_sheet(wb,hacerHoja("Estructura NQN",[{nombre:"Estructura NQN",grupo:"K) ESTRUCTURA NQN"}]),"Estructura NQN");
-  XLSX.writeFile(wb,`presupuesto_detalle_${meses[0]}_${meses[meses.length-1]}.xlsx`);
+  const H_TOT=["Total",[{nombre:"Estructura",grupo:"K) ESTRUCTURA"},{nombre:"Estructura NQN",grupo:"K) ESTRUCTURA NQN"}]];
+  const H_EST=["Estructura",[{nombre:"Estructura",grupo:"K) ESTRUCTURA"}]];
+  const H_NQN=["Estructura NQN",[{nombre:"Estructura NQN",grupo:"K) ESTRUCTURA NQN"}]];
+  let hojas;
+  if(bloqueSel==="K) ESTRUCTURA") hojas=[H_EST,H_NQN,H_TOT];
+  else if(bloqueSel==="K) ESTRUCTURA NQN") hojas=[H_NQN,H_EST,H_TOT];
+  else if(bloqueSel) hojas=[[selTxt("pBloque"),[{nombre:selTxt("pBloque"),grupo:bloqueSel}]]];
+  else hojas=[H_TOT,H_EST,H_NQN];
+  // Con un responsable elegido, se omiten las hojas donde no tiene cuentas (ej. no tiene nada en NQN).
+  let sheets=hojas.map(([t,sec])=>({sh:hacerHoja(t,sec),n:sec.reduce((a,x)=>a+filasBloque(x.grupo).out.length,0)}));
+  if(resp&&sheets.some(x=>x.n)) sheets=sheets.filter(x=>x.n);
+  sheets=sheets.map(x=>x.sh);
+  const archivo=`presupuesto_detalle_${resp?resp.split(/[ ,]/)[0]+"_":""}${["pesos","usd_oficial","usd_billete","axi"][cur]}_${meses[0]}_${meses[meses.length-1]}.xlsx`;
+  xlsxDescargar(sheets,MONEDA_SIMB[cur]||"$",archivo);
 }
 window.exportarPtoDetalleExcel=exportarPtoDetalleExcel;
+/* ===== Excel con formato (xlsx propio, sin librerias externas) =====
+   La version de SheetJS embebida no escribe estilos (colores, bordes, paneles inmovilizados), asi que
+   para los informes "amigables" se arma el .xlsx a mano: XML de OOXML + zip sin compresion.
+   sheets: [{name, cols:[anchos], rows:[{cells:[{v,s}|null], level, ht}], freeze:{r,c} (filas/columnas
+   fijas), filter:{r0,c0,r1,c1} (0-based), merges:["A1:F1"]}]. Estilos (s): ver XLSX_EST. */
+const XLSX_EST={title:1,sub:2,head:3,headD:4,txt:5,txtTot:6,txtDet:7,num:8,numTot:9,numOver:10,numDet:11,pct:12,pctOver:13,sec:14,numSec:15,txtSec:16,numUnder:17};
+function xlsxColL(c){ let s=""; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26); } return s; }
+function xlsxEstiloXml(simb){
+  const q=s=>s.replace(/"/g,"&quot;");
+  const fNum=`"${simb}" #,##0;[Red]-"${simb}" #,##0;"–"`, fPct='0%;[Red]-0%;"–"';
+  const B='<border><left style="thin"><color rgb="FFD8CBA6"/></left><right style="thin"><color rgb="FFD8CBA6"/></right><top style="thin"><color rgb="FFD8CBA6"/></top><bottom style="thin"><color rgb="FFD8CBA6"/></bottom><diagonal/></border>';
+  // fonts: 0 normal, 1 titulo, 2 sub, 3 head blanco, 4 negrita, 5 detalle gris, 6 negrita roja
+  const fonts=['<font><sz val="10"/><name val="Calibri"/></font>','<font><b/><sz val="14"/><color rgb="FF2F3E2C"/><name val="Calibri"/></font>','<font><i/><sz val="9"/><color rgb="FF6B6B6B"/><name val="Calibri"/></font>','<font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>','<font><b/><sz val="10"/><name val="Calibri"/></font>','<font><i/><sz val="10"/><color rgb="FF555555"/><name val="Calibri"/></font>','<font><b/><sz val="10"/><color rgb="FFB5563F"/><name val="Calibri"/></font>','<font><b/><sz val="10"/><color rgb="FF2F3E2C"/><name val="Calibri"/></font>'];
+  // fills: 0 none, 1 gray125 (obligatorios), 2 verde oscuro, 3 arena (desvio), 4 beige total, 5 rojo claro, 6 seccion, 7 verde claro
+  const fill=c=>`<fill><patternFill patternType="solid"><fgColor rgb="${c}"/><bgColor indexed="64"/></patternFill></fill>`;
+  const fills=['<fill><patternFill patternType="none"/></fill>','<fill><patternFill patternType="gray125"/></fill>',fill("FF3E5641"),fill("FFE9DDB8"),fill("FFEDEBE1"),fill("FFF8D7CF"),fill("FFDCE6D4"),fill("FFEAF2E3")];
+  const xf=(numFmt,font,fill,border,al)=>`<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="${border}" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${al||""}</xf>`;
+  const L='<alignment vertical="center"/>', C='<alignment horizontal="center" vertical="center" wrapText="1"/>', D='<alignment vertical="center" indent="2"/>';
+  const xfs=[xf(0,0,0,0),xf(0,1,0,0),xf(0,2,0,0),xf(0,3,2,1,C),xf(0,7,3,1,C),xf(0,0,0,1,L),xf(0,4,4,1,L),xf(0,5,0,1,D),
+    xf(164,0,0,1),xf(164,4,4,1),xf(164,4,5,1),xf(164,5,0,1),xf(165,0,0,1),xf(165,4,5,1),xf(0,7,6,1,L),xf(164,7,6,1),xf(0,7,6,1,L),xf(164,0,7,1)];
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="${q(fNum)}"/><numFmt numFmtId="165" formatCode="${q(fPct)}"/></numFmts><fonts count="${fonts.length}">${fonts.join("")}</fonts><fills count="${fills.length}">${fills.join("")}</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>${B}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+}
+function xlsxHojaXml(sh){
+  const x=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,"");
+  const maxLvl=Math.max(0,...sh.rows.map(r=>r.level||0));
+  let pane="";
+  if(sh.freeze&&(sh.freeze.r||sh.freeze.c)){
+    const fr=sh.freeze.r||0, fc=sh.freeze.c||0, act=fr&&fc?"bottomRight":(fr?"bottomLeft":"topRight");
+    pane=`<pane${fc?` xSplit="${fc}"`:""}${fr?` ySplit="${fr}"`:""} topLeftCell="${xlsxColL(fc)}${fr+1}" activePane="${act}" state="frozen"/><selection pane="${act}"/>`;
+  }
+  const cols=(sh.cols||[]).map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("");
+  const rows=sh.rows.map((r,ri)=>{
+    const cs=(r.cells||[]).map((c,ci)=>{
+      if(c==null) return "";
+      const ref=xlsxColL(ci)+(ri+1), s=c.s?` s="${c.s}"`:"";
+      if(c.v==null||c.v==="") return `<c r="${ref}"${s}/>`;
+      if(typeof c.v==="number"&&isFinite(c.v)) return `<c r="${ref}"${s}><v>${c.v}</v></c>`;
+      return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${x(c.v)}</t></is></c>`;
+    }).join("");
+    const at=(r.level?` outlineLevel="${r.level}"`:"")+(r.ht?` ht="${r.ht}" customHeight="1"`:"");
+    return `<row r="${ri+1}"${at}>${cs}</row>`;
+  }).join("");
+  const f=sh.filter?`<autoFilter ref="${xlsxColL(sh.filter.c0)}${sh.filter.r0+1}:${xlsxColL(sh.filter.c1)}${sh.filter.r1+1}"/>`:"";
+  const m=(sh.merges&&sh.merges.length)?`<mergeCells count="${sh.merges.length}">${sh.merges.map(r=>`<mergeCell ref="${r}"/>`).join("")}</mergeCells>`:"";
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><outlinePr summaryBelow="0"/></sheetPr><sheetViews><sheetView workbookViewId="0"${sh.active?' tabSelected="1"':""}>${pane}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"${maxLvl?` outlineLevelRow="${maxLvl}"`:""}/>${cols?`<cols>${cols}</cols>`:""}<sheetData>${rows}</sheetData>${f}${m}<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToHeight="0"/></worksheet>`;
+}
+function xlsxZip(files){ // files: [{name, data:string}] -> Uint8Array (zip STORE)
+  const enc=new TextEncoder();
+  const crcT=xlsxZip.t||(xlsxZip.t=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})());
+  const crc=b=>{let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=crcT[(c^b[i])&0xFF]^(c>>>8);return(c^0xFFFFFFFF)>>>0;};
+  const parts=[], central=[]; let off=0;
+  const u16=v=>[v&255,(v>>>8)&255], u32=v=>[v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255];
+  files.forEach(f=>{
+    const nm=enc.encode(f.name), dt=enc.encode(f.data), c=crc(dt);
+    const loc=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(c),...u32(dt.length),...u32(dt.length),...u16(nm.length),...u16(0)]);
+    parts.push(loc,nm,dt);
+    central.push(new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(c),...u32(dt.length),...u32(dt.length),...u16(nm.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(off)]),nm);
+    off+=loc.length+nm.length+dt.length;
+  });
+  const cdLen=central.reduce((s,a)=>s+a.length,0);
+  const end=new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cdLen),...u32(off),...u16(0)]);
+  const all=[...parts,...central,end], out=new Uint8Array(all.reduce((s,a)=>s+a.length,0));
+  let p=0; all.forEach(a=>{out.set(a,p);p+=a.length;}); return out;
+}
+function xlsxArmar(sheets,simb){
+  const x=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  const nombres=[]; sheets.forEach(sh=>{ let n=String(sh.name||"Hoja").replace(/[\\\/\?\*\[\]:]/g," ").slice(0,31)||"Hoja", b=n, k=2; while(nombres.includes(n)) n=(b.slice(0,28)+" "+(k++)); nombres.push(n); });
+  if(!sheets.some(s=>s.active)) sheets[0].active=true;
+  const dn=sheets.map((sh,i)=>sh.filter?`<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${x(nombres[i].replace(/'/g,"''"))}'!$${xlsxColL(sh.filter.c0)}$${sh.filter.r0+1}:$${xlsxColL(sh.filter.c1)}$${sh.filter.r1+1}</definedName>`:"").join("");
+  const act=Math.max(0,sheets.findIndex(s=>s.active));
+  const files=[
+    {name:"[Content_Types].xml",data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((s,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`},
+    {name:"_rels/.rels",data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`},
+    {name:"xl/workbook.xml",data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="${act}"/></bookViews><sheets>${nombres.map((n,i)=>`<sheet name="${x(n)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("")}</sheets>${dn?`<definedNames>${dn}</definedNames>`:""}</workbook>`},
+    {name:"xl/_rels/workbook.xml.rels",data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((s,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`},
+    {name:"xl/styles.xml",data:xlsxEstiloXml(simb||"$")},
+    ...sheets.map((sh,i)=>({name:`xl/worksheets/sheet${i+1}.xml`,data:xlsxHojaXml(sh)}))
+  ];
+  return xlsxZip(files);
+}
+function xlsxDescargar(sheets,simb,nombreArchivo){
+  const bytes=xlsxArmar(sheets,simb);
+  const blob=new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=nombreArchivo; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  return bytes;
+}
+/* Descargar Excel (Presupuesto): exporta EXACTAMENTE lo que se ve (bloque, responsable, cuentas,
+   moneda y meses elegidos, detalle de Sueldos expandido) como Excel con formato: encabezado y
+   columnas Cuenta/Resp. inmovilizadas, filtros, importes numericos en la moneda elegida (negativos
+   en rojo) y las celdas excedidas del Pto resaltadas como en pantalla. */
 function exportTabla(){
+  try{ return exportTablaXlsx(); }catch(e){ console.warn("Excel con formato no disponible, se usa el simple:",e); }
+  return exportTablaHtml();
+}
+function exportTablaXlsx(){
+  const t=document.getElementById("pTabla"); if(!t) return;
+  const cur=+document.getElementById("pMoneda").value||0, simb=MONEDA_SIMB[cur]||"$";
+  const selTxt=id=>{const s=document.getElementById(id); return s&&s.selectedIndex>=0?s.options[s.selectedIndex].text:"";};
+  const num=txt=>{ const s=String(txt).replace(/\s+/g,"").replace(/^Σ/,""); if(!s||s==="–"||s==="-") return null;
+    if(/%$/.test(s)){ const v=parseFloat(s.slice(0,-1).replace(/\./g,"").replace(",",".")); return isNaN(v)?null:{pct:v/100}; }
+    if(!/^-?[\d.]+(,\d+)?$/.test(s)) return null; const v=parseFloat(s.replace(/\./g,"").replace(",",".")); return isNaN(v)?null:v; };
+  const headTr=t.querySelector("thead tr"); if(!headTr) return;
+  const ths=[...headTr.children];
+  const hdr=ths.map(th=>{ const c=th.cloneNode(true); c.querySelectorAll('span[onclick*="togglePtoDetalle"]').forEach(s=>s.remove()); c.querySelectorAll("br").forEach(b=>b.replaceWith(" ")); return c.textContent.replace(/[▼▲»«⇅↑↓]/g,"").replace(/\s+/g," ").trim(); });
+  const esDesv=ths.map(th=>th.classList.contains("info")&&th.classList.contains("fzr"));
+  const nCols=hdr.length, nFijas=ths.filter(th=>th.classList.contains("fz")).length||2;
+  const titulo=`Presupuesto · ${selTxt("pBloque")} · ${selTxt("pResp")||"Todos los responsables"} · ${selTxt("pMoneda")} · ${selTxt("pDesde")} a ${selTxt("pHasta")}`;
+  const rows=[
+    {cells:[{v:titulo,s:XLSX_EST.title}],ht:22},
+    {cells:[{v:`Cuentas: ${selTxt("pFiltro")}. Descargado el ${new Date().toLocaleDateString("es-AR")}. Rojo = importe negativo; celdas rojas claras = mes por encima del Pto (como en pantalla).`,s:XLSX_EST.sub}]},
+    {cells:hdr.map((h,i)=>({v:h,s:esDesv[i]?XLSX_EST.headD:XLSX_EST.head})),ht:32}
+  ];
+  t.querySelectorAll("tbody tr").forEach(tr=>{
+    if(tr.style.display==="none") return;
+    const tot=tr.classList.contains("result"), det=tr.classList.contains("ptodet");
+    const tds=[...tr.children]; if(!tds.length) return;
+    const cells=[]; let ci=0;
+    tds.forEach(td=>{
+      const span=+td.colSpan||1;
+      const s=td.querySelector("select"), inp=td.querySelector("input");
+      let txt;
+      if(td.classList.contains("fz2")) txt=(td.getAttribute("title")||td.innerText).replace(/\s+/g," ").trim(); // nombre completo del responsable
+      else if(td.classList.contains("fz1")) txt=td.innerText.replace(/[▸▾🕘↳]/g,"").replace(/\s+/g," ").trim();
+      else txt=s?(s.options[s.selectedIndex]||{}).text||s.value:inp?inp.value:td.innerText.replace(/\s+/g," ").trim();
+      if(det&&td.classList.contains("fz1")) txt="↳ "+txt;
+      const over=td.classList.contains("over"), esTexto=td.classList.contains("fz1")||td.classList.contains("fz2")||(td.classList.contains("fz3"));
+      const n=esTexto?null:num(txt);
+      let st;
+      if(n!=null&&typeof n==="object") cells.push({v:n.pct,s:over?XLSX_EST.pctOver:XLSX_EST.pct});
+      else if(n!=null){ st=tot?XLSX_EST.numTot:over?XLSX_EST.numOver:det?XLSX_EST.numDet:XLSX_EST.num; cells.push({v:n,s:st}); }
+      else { st=tot?XLSX_EST.txtTot:det&&td.classList.contains("fz1")?XLSX_EST.txtDet:XLSX_EST.txt; cells.push({v:esTexto?txt:(txt==="–"?"":txt),s:esTexto?st:(tot?XLSX_EST.numTot:det?XLSX_EST.numDet:XLSX_EST.num)}); }
+      for(let k=1;k<span;k++) cells.push({v:"",s:tot?XLSX_EST.txtTot:XLSX_EST.txt});
+      ci+=span;
+    });
+    rows.push({cells,level:det?1:0});
+  });
+  const cols=hdr.map((h,i)=>i===0?42:(i===1?26:(i<nFijas?12:14)));
+  const sheet={name:"Presupuesto",cols,rows,freeze:{r:3,c:Math.min(2,nFijas)},filter:{r0:2,c0:0,r1:rows.length-1,c1:nCols-1},merges:[`A1:${xlsxColL(Math.max(6,nCols-1))}1`,`A2:${xlsxColL(Math.max(6,nCols-1))}2`]};
+  const archivo=`presupuesto_${(selTxt("pBloque")||"").replace(/\s+/g,"_")}_${(document.getElementById("pResp").value?selTxt("pResp").split(/[ ,]/)[0]+"_":"")}${["pesos","usd_oficial","usd_billete","axi"][cur]}.xlsx`;
+  xlsxDescargar([sheet],simb,archivo);
+}
+function exportTablaHtml(){
+
   const t=document.getElementById("pTabla"),rows=[];
   t.querySelectorAll("tr").forEach(tr=>{
     const head=tr.parentNode.tagName==="THEAD", tot=tr.classList.contains("result");
