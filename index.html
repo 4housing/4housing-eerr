@@ -204,7 +204,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
 .cc-h{font-size:12px;font-weight:600;color:#7a6a4f;margin-bottom:6px}
 .cc-grid{display:flex;gap:10px;flex-wrap:wrap}
 .cc-cell{flex:1;min-width:170px;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border-radius:8px;background:#faf6ec}
-.cc-cell span{font-size:11px;color:#8a7a5f}.cc-cell b{font-size:17px;color:#3a3329}
+.cc-cell small{font-size:10.5px;color:#8a7a5f}.cc-cell span{font-size:11px;color:#8a7a5f}.cc-cell b{font-size:17px;color:#3a3329}
 .cc-ok{background:#eaf6ea}.cc-ok b{color:#2c7a2c}
 .cc-warn{background:#fdeeea}.cc-warn b{color:#b5462a}
 .cc-note{margin-top:8px;font-size:11px;color:#9a7a4a}.cc-okt{color:#2c7a2c}.cc-warnt{color:#b5462a}
@@ -223,6 +223,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
       <button class="tab" data-v="pto">Presupuesto · Estructura</button>
       <button class="tab" data-v="cmv">Proyectos · CMV</button>
       <button class="tab" data-v="proy">Control Proyectos</button>
+      <button class="tab" data-v="costeos">Costeos</button>
       <button class="tab" data-v="dic">Diccionario</button>
     </nav>
   </div>
@@ -394,6 +395,14 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   <div id="pyControl" class="cmvctrl"></div>
   <div id="pyDetalle" class="cmvctrl"></div>
   <div class="foot" id="pyFoot"></div>
+</div>
+
+<div id="view-costeos" style="display:none">
+  <div class="controls">
+    <div class="ctl"><label for="cosProy">Proyecto</label><select id="cosProy" style="min-width:300px"></select></div>
+    <div class="ctl"><label>&nbsp;</label><button class="btn" id="cosXlsx">Descargar Excel</button></div>
+  </div>
+  <div id="cosBody"></div>
 </div>
 
 <div id="view-dic" style="display:none">
@@ -576,7 +585,9 @@ function renderCharts(pg,meses,bloques){
    "Miembro con edición" (editor, se tilda a mano); editar siempre dentro de ver. Dirección ve y edita todo.
    OJO: esto oculta/bloquea en la pantalla; la base (RLS de eerr_estado) sigue permitiendo escribir a
    cualquiera con el sector eerr -- endurecerlo es un SQL aparte. */
-const SECC_EERR=["eerr","pto","cmv","proy","dic"];
+const SECC_EERR=["eerr","pto","cmv","proy","costeos","dic"];
+// Secciones sensibles: sin listas guardadas en el portal NO se ven (Dirección las habilita a mano).
+const SECC_EERR_SENSIBLES=new Set(["costeos"]);
 const PERM_EERR={dir:true,ver:new Set(SECC_EERR),editar:new Set(SECC_EERR),cargo:"",nombre:""};
 const puedeVer=sec=>PERM_EERR.dir||PERM_EERR.ver.has(sec);
 const puedeEditar=sec=>PERM_EERR.dir||PERM_EERR.editar.has(sec);
@@ -595,7 +606,7 @@ async function cargarPermisosEerr(){
     if(perfil&&perfil.es_direccion){ PERM_EERR.dir=true; PERM_EERR.cargo="Dirección"; return; }
     PERM_EERR.dir=false;
     const cargo=(fila&&fila.cargo)||"lector", perm=(fila&&fila.permisos)||{};
-    let ver=Array.isArray(perm.ver)?perm.ver.filter(x=>SECC_EERR.includes(x)):SECC_EERR.slice();
+    let ver=Array.isArray(perm.ver)?perm.ver.filter(x=>SECC_EERR.includes(x)):SECC_EERR.filter(x=>!SECC_EERR_SENSIBLES.has(x));
     let editar=Array.isArray(perm.editar)?perm.editar.slice():((cargo==="lector"||cargo==="lectura"||cargo==="editor")?[]:SECC_EERR.slice());
     if(cargo==="lector"||cargo==="lectura") editar=[];
     editar=editar.filter(x=>ver.includes(x));
@@ -627,7 +638,7 @@ function aplicarPermisosEerr(){
   const vis=document.querySelector(".tab.active");
   if(!vis||!puedeVer(vis.dataset.v)){ const pri=SECC_EERR.find(puedeVer); if(pri) showView(pri); }
 }
-function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
+function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-costeos").style.display=v==="costeos"?"":"none";if(v==="costeos")initCosteos();document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
 // Sub-pestañas dentro de Presupuesto·Estructura: "Presupuesto" (la tabla) e "Historial de cambios"
 // (antes era una pestaña propia del nivel superior, pero ocupaba mucho lugar para algo que se usa
 // poco -- ahora vive adentro, sin competir con las pestañas principales).
@@ -4903,6 +4914,165 @@ function parseOCPendFacturar(rows){
   }
   return agg;
 }
+/* ===== Costeos (resultado real por proyecto) =====
+   Replica el RESUMEN del modelo de costeo (PL0030_VDP_V04.xlsx) para el proyecto elegido, en 4 monedas:
+   - Ingresos: facturado (filas 03 del proyecto con cuenta 4..., en positivo) + pendiente de facturar de
+     ventas (manual, en $; se pasa a USD con el TC del dia).
+   - Gastos: Compras, Tesoreria, Pend. Facturar (OC), Caja2 (ContaParam + ContaOC), Consumibles, MO 4H,
+     Bonos, Otros (otros modulos); Infraestructura = % s/ (Compras + Tesoreria + Pend. Facturar + Caja2);
+     IIBB y Ganancias = % s/ Ingresos; Tasas (manual, $). Los % vienen del costeo de ventas (default
+     10% / 3% / 7%, como el modelo) y se editan por proyecto.
+   - Controles: costeo vs EERR (gastos contables del costeo = CMV del proyecto en Proyectos·CMV),
+     OC - Pend. Facturar - Compras (con detalle y comentarios por proveedor) y costo real vs costo
+     informado (USD, manual).
+   Datos manuales en eerr_estado: COSTEOS_MANUAL {cod:{infraPct,iibbPct,ganPct,tasas,costoInfUsd,nota,
+   pendVentas:[{concepto,ars}]}} y COSTEOS_COMENT {cod:{proveedor:texto}}; se guardan releyendo la clave
+   para no pisar cambios de otra persona. Editar requiere permiso "Editar" en Costeos. */
+let COSTEOS_MANUAL={}, COSTEOS_COMENT={};
+const COSTEO_DEF={infraPct:10,iibbPct:3,ganPct:7,tasas:0,costoInfUsd:0,nota:"",pendVentas:[]};
+function costeoManual(cod){ return Object.assign({},COSTEO_DEF,COSTEOS_MANUAL[cod]||{}); }
+function costeoTcHoy(){
+  const hoy=new Date().toISOString().slice(0,10);
+  // TC de hoy: tabla del diccionario (hasta 40 dias atras), si no el dato en vivo, si no el ultimo de la tabla.
+  const ult=(m,k)=>k&&m[k]!=null?m[k]:null;
+  const of=buscarCotizAtras(HIST_CAMBIARIO.ofic,hoy,40)||LIVE_TC.ofic||ult(HIST_CAMBIARIO.ofic,HIST_CAMBIARIO.ofic_last)||null;
+  const bi=buscarCotizAtras(HIST_CAMBIARIO.bill,hoy,40)||LIVE_TC.bill||ult(HIST_CAMBIARIO.bill,HIST_CAMBIARIO.bill_last)||null;
+  return {of,bi};
+}
+function costeoCalcular(cod){
+  const pr=PROY_CTRL.proyectos[cod]||{cats:{}};
+  const suma=cat=>{ const s=pr.cats[cat]; const t=[0,0,0,0]; if(s) Object.values(s).forEach(v=>{for(let k=0;k<4;k++) t[k]+=(v[k]||0);}); return t; };
+  const add=(...arr)=>[0,1,2,3].map(k=>arr.reduce((x,a)=>x+(a[k]||0),0));
+  const mul=(a,f)=>a.map(v=>v*f);
+  const mn=costeoManual(cod), tc=costeoTcHoy();
+  const ars2=a=>[a, tc.of?a/tc.of:0, tc.bi?a/tc.bi:0, a]; // monto de hoy: AXI = pesos de hoy
+  const facturado=mul(suma("Ingresos"),-1);
+  const pendV=(mn.pendVentas||[]).map(p=>({concepto:p.concepto||"Pend. facturar",v:ars2(+p.ars||0)}));
+  const ingresos=add(facturado,...pendV.map(p=>p.v));
+  const compras=suma("Compras"), tes=suma("Tesoreria"), caja2=add(suma("ContaParam"),suma("ContaOC"));
+  const consum=suma("Consumibles"), mo=suma("MO 4H"), bonos=suma("Bonos");
+  const conocidas=new Set(["Ingresos","Compras","Tesoreria","ContaParam","ContaOC","Consumibles","MO 4H","Bonos"]);
+  const otros=add(...Object.keys(pr.cats).filter(c=>!conocidas.has(c)).map(suma));
+  const pf=(PROY_CTRL_PF[cod]||{tot:[0,0,0,0]}).tot.slice();
+  const infra=mul(add(compras,tes,pf,caja2),(+mn.infraPct||0)/100);
+  const iibb=mul(ingresos,(+mn.iibbPct||0)/100), gan=mul(ingresos,(+mn.ganPct||0)/100);
+  const tasas=ars2(+mn.tasas||0);
+  const lineasG=[["Compras",compras],["Tesorería",tes],["Pend. Facturar (OC)",pf],["Caja2 (ContaParam + ContaOC)",caja2],["Consumibles",consum],["MO 4H",mo],["Bonos",bonos]];
+  if(otros.some(v=>Math.abs(v)>0.5)) lineasG.push(["Otros módulos",otros]);
+  lineasG.push([`Infraestructura (${mn.infraPct}%)`,infra],[`IIBB (${mn.iibbPct}% s/ ingresos)`,iibb],[`Ganancias (${mn.ganPct}% s/ ingresos)`,gan],["Tasas",tasas]);
+  const gastos=add(...lineasG.map(l=>l[1]));
+  const contable=add(compras,tes,caja2,consum,mo,bonos,otros); // lo que esta en Tango (sin PF ni estimados)
+  // EERR: apertura de Ventas/CMV del proyecto (puede venir partido, ej. PL0076 -> PL7601/PL7602)
+  let eerrG=0,eerrI=0;
+  (PROJ_DATA.aperturas||[]).filter(a=>a.codigo===cod).forEach(a=>{ ["GASTOS","INGRESOS"].forEach(mv=>{ const s=(a.mov||{})[mv]||{}; Object.values(s).forEach(v=>{ if(mv==="GASTOS") eerrG+=v[0]||0; else eerrI+=v[0]||0; }); }); });
+  const ocT=((PROY_CTRL_OC[cod]||{}).tot||[0])[0]||0;
+  return {mn,tc,facturado,pendV,ingresos,lineasG,gastos,resultado:add(ingresos,mul(gastos,-1)),contable,eerrG,eerrI:-eerrI,ocT,pfArs:pf[0],comprasArs:compras[0]};
+}
+function initCosteos(){
+  const sel=document.getElementById("cosProy"); if(!sel) return;
+  const cods=new Set(Object.keys(PROY_CTRL.proyectos));
+  (PROJ_DATA.aperturas||[]).forEach(a=>{ if(!a.es_bucket&&/^(PL|IF)\d/.test(a.codigo)) cods.add(a.codigo); });
+  const desc=c=>(PROY_CTRL.proyectos[c]||{}).desc||((PROJ_DATA.aperturas||[]).find(a=>a.codigo===c)||{}).desc||c;
+  const cur=sel.value; sel.innerHTML='<option value="">Elegí un proyecto…</option>';
+  [...cods].sort().forEach(c=>sel.add(new Option(desc(c),c)));
+  if(cur&&cods.has(cur)) sel.value=cur;
+  if(!initCosteos._wired){ initCosteos._wired=true; sel.addEventListener("change",renderCosteos); document.getElementById("cosXlsx").addEventListener("click",exportCosteo); }
+  renderCosteos();
+}
+async function guardarCosteoClave(clave,mutar){
+  const actual=(await cargarClave(clave))||{}; mutar(actual); await guardarClave(clave,actual); return actual;
+}
+function renderCosteos(){
+  const cod=document.getElementById("cosProy").value, box=document.getElementById("cosBody"); if(!box) return;
+  if(!cod){ box.innerHTML='<div class="note">Elegí un proyecto para ver su costeo (resultado real).</div>'; return; }
+  const c=costeoCalcular(cod), puede=puedeEditar("costeos"), dis=puede?"":" disabled";
+  const f0=v=>Math.abs(v)<0.5?"–":fmt(v), pc=v=>isFinite(v)&&Math.abs(v)>0.0005?(v*100).toFixed(1)+"%":"–";
+  const tcI=(a,u)=>Math.abs(u)>0.5?fmt(a/u):"–";
+  const filaR=(lbl,v,tot,cls)=>`<tr${cls?` class="${cls}"`:""}><td class="fz1">${lbl}</td><td class="fzr">${f0(v[0])}</td><td class="fzr mut">${tot?pc(v[0]/tot[0]):""}</td><td class="fzr">${f0(v[1])}</td><td class="fzr mut">${tcI(v[0],v[1])}</td><td class="fzr">${f0(v[2])}</td><td class="fzr mut">${tcI(v[0],v[2])}</td><td class="fzr">${f0(v[3])}</td><td class="fzr mut">${tot?pc(v[3]/tot[3]):""}</td><td class="fzr mut">${Math.abs(v[0])>0.5?pc((v[3]-v[0])/Math.abs(v[0])):"–"}</td></tr>`;
+  let rows=`<tr class="section"><td colspan="10"><span class="seclbl">Ingresos</span></td></tr>`;
+  rows+=filaR("Facturado",c.facturado,c.ingresos);
+  c.pendV.forEach(p=>rows+=filaR("Pend. facturar · "+esc(p.concepto),p.v,c.ingresos));
+  rows+=filaR("Total ingresos",c.ingresos,null,"subtotal");
+  rows+=`<tr class="section"><td colspan="10"><span class="seclbl">Gastos</span></td></tr>`;
+  c.lineasG.forEach(([l,v])=>rows+=filaR(esc(l),v,c.gastos));
+  rows+=filaR("Total gastos",c.gastos,null,"subtotal");
+  rows+=filaR("Resultado",c.resultado,null,"result");
+  const margen=c.ingresos.map((v,k)=>v?c.resultado[k]/v:0);
+  rows+=`<tr><td class="fz1 mut">Margen s/ ingresos</td><td class="fzr">${pc(margen[0])}</td><td></td><td class="fzr">${pc(margen[1])}</td><td></td><td class="fzr">${pc(margen[2])}</td><td></td><td class="fzr">${pc(margen[3])}</td><td colspan="2"></td></tr>`;
+  const tabla=`<div class="table-wrap"><table id="cosTabla"><thead><tr><th>Concepto</th><th>ARS</th><th>%</th><th>USD Oficial</th><th>TC impl.</th><th>USD Blue</th><th>TC impl.</th><th>AXI</th><th>%</th><th>AXI vs ARS</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  // Controles
+  const difE=c.contable[0]-c.eerrG, difEI=c.ingresos[0]-(c.pendV.reduce((x,p)=>x+p.v[0],0))-c.eerrI;
+  const ok=v=>Math.abs(v)<1;
+  const comp=c.ocT-c.pfArs, difOC=comp-c.comprasArs, pctOC=c.ocT?difOC/c.ocT:0;
+  const realBi=c.gastos[2], realOf=c.gastos[1], inf=+c.mn.costoInfUsd||0;
+  const ctrl=`<div class="cc-grid" style="margin-top:8px">
+    <div class="cc-cell ${ok(difE)?"cc-ok":"cc-warn"}"><span>Gastos contables vs EERR (CMV)</span><b>${fmt(difE)}</b><small>costeo ${fmt(c.contable[0])} · EERR ${fmt(c.eerrG)}</small></div>
+    <div class="cc-cell ${ok(difEI)?"cc-ok":"cc-warn"}"><span>Facturado vs EERR (Ventas)</span><b>${fmt(difEI)}</b><small>costeo ${fmt(c.facturado[0])} · EERR ${fmt(c.eerrI)}</small></div>
+    <div class="cc-cell ${Math.abs(pctOC)<0.01||ok(difOC)?"cc-ok":"cc-warn"}"><span>OC − Pend. Fact. − Compras</span><b>${fmt(difOC)}</b><small>${(pctOC*100).toFixed(1)}% s/ OC · OC ${fmt(c.ocT)} · PF ${fmt(c.pfArs)} · Compras ${fmt(c.comprasArs)}</small></div>
+    <div class="cc-cell ${!inf?"":(realBi<=inf?"cc-ok":"cc-warn")}"><span>Costo real vs informado (USD)</span><b>${inf?fmt(inf-realBi):"–"}</b><small>${inf?`informado US$ ${fmt(inf)} · real US$ ${fmt(realBi)} blue / ${fmt(realOf)} of. · ${(realBi/inf*100).toFixed(1)}%`:"cargá el costo informado"}</small></div>
+  </div>`;
+  // Manual
+  const mn=c.mn;
+  const pendRows=(mn.pendVentas||[]).map((p,i)=>`<div style="display:flex;gap:6px;margin:3px 0"><input class="txt cos-pv-c" data-i="${i}" value="${esc(p.concepto||"")}" placeholder="Concepto" style="width:220px"${dis}><input class="txt cos-pv-a" data-i="${i}" value="${fmt(+p.ars||0)}" style="width:130px;text-align:right"${dis}>${puede?`<button class="btn cos-pv-x" data-i="${i}" title="Quitar">✕</button>`:""}</div>`).join("");
+  const manual=`<div class="cmvctrl"><div class="cc-h">Datos del proyecto (manuales) ${puede?"":"· solo lectura"}</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+      <span class="ctl"><label>Infraestructura (%)</label><input id="cosInfra" class="txt" style="width:70px" value="${mn.infraPct}"${dis}></span>
+      <span class="ctl"><label>IIBB (%)</label><input id="cosIibb" class="txt" style="width:70px" value="${mn.iibbPct}"${dis}></span>
+      <span class="ctl"><label>Ganancias (%)</label><input id="cosGan" class="txt" style="width:70px" value="${mn.ganPct}"${dis}></span>
+      <span class="ctl"><label>Tasas ($)</label><input id="cosTasas" class="txt" style="width:120px" value="${fmt(mn.tasas||0)}"${dis}></span>
+      <span class="ctl"><label>Costo informado (US$)</label><input id="cosInf" class="txt" style="width:130px" value="${fmt(mn.costoInfUsd||0)}"${dis}></span>
+      <span class="ctl"><label>Nota</label><input id="cosNota" class="txt" style="width:260px" value="${esc(mn.nota||"")}" placeholder="ej. informado por Gus 26/06"${dis}></span>
+    </div>
+    <div style="margin-top:8px"><b style="font-size:12px">Ventas pendientes de facturar ($)</b> <span class="note" style="font-size:11px">se pasan a USD con el TC de hoy (of. ${c.tc.of?fmt(c.tc.of):"–"} · blue ${c.tc.bi?fmt(c.tc.bi):"–"})</span>${pendRows||'<div class="note" style="font-size:11.5px">Sin pendientes cargados.</div>'}${puede?`<button class="btn" id="cosPvAdd" style="margin-top:4px">+ Agregar pendiente</button>`:""}</div>
+    ${puede?`<div style="margin-top:8px"><button class="btn updbtn" id="cosGuardar" style="background:#3d5a80">Guardar datos del proyecto</button> <span id="cosMsg" class="updmsg"></span></div>`:""}</div>`;
+  // Proveedores
+  const lista=proyDetalleProveedores(cod,PROY_CTRL.meses), coms=COSTEOS_COMENT[cod]||{};
+  const provRows=lista.filter(p=>Math.abs(p.dif)>=1||coms[p.proveedor]).map(p=>{ const cl=Math.abs(p.pct)<0.01?"pos":"neg";
+    return `<tr><td>${esc(p.proveedor)}</td><td class="fzr">${fmt(p.compras)}</td><td class="fzr">${fmt(p.oc)}</td><td class="fzr">${fmt(p.pf)}</td><td class="fzr ${cl}">${fmt(p.dif)}</td><td class="fzr ${cl}">${(p.pct*100).toFixed(1)}%</td><td><input class="txt cos-com" data-p="${esc(p.proveedor)}" value="${esc(coms[p.proveedor]||"")}" placeholder="${puede?"Explicación de la diferencia…":""}" style="width:320px"${dis}></td></tr>`; }).join("");
+  const prov=`<div class="cmvctrl"><div class="cc-h">Diferencias OC vs contabilidad por proveedor (acumulado, ARS) · ${lista.filter(p=>Math.abs(p.dif)>=1).length} con diferencia de ${lista.length}</div>
+    <div class="table-wrap">${provRows?`<table><thead><tr><th>Proveedor</th><th>Compras (Tango)</th><th>OC Emitidas</th><th>Pend. Facturar</th><th>Diferencia</th><th>%</th><th>Comentario</th></tr></thead><tbody>${provRows}</tbody></table>`:'<div class="note">Sin diferencias por proveedor.</div>'}</div></div>`;
+  box.innerHTML=`<div class="cc-h" style="font-size:14px">Resumen ${esc(cod)} · resultado real (acumulado del proyecto)</div>${tabla}${ctrl}${manual}${prov}
+    <div class="foot">Fuente: crudo de Tango (filas 03 del proyecto, todos los meses cargados), OC Emitidas / Pend. de Facturar (Control Proyectos) y la apertura de Ventas/CMV para el control contra el EERR. Ingresos en positivo. TC impl. = ARS / USD. AXI vs ARS = cuánto cambia el importe re-expresado por inflación.</div>`;
+  if(!puede) return;
+  const leerNum=s=>parseFloat(String(s).replace(/\./g,"").replace(",","."))||0;
+  const leerPend=()=>[...box.querySelectorAll(".cos-pv-c")].map(inp=>({concepto:inp.value.trim(),ars:leerNum(box.querySelector(`.cos-pv-a[data-i="${inp.dataset.i}"]`).value)}));
+  const guardar=async(extra)=>{
+    const datos={infraPct:leerNum(document.getElementById("cosInfra").value.replace(".",",")),iibbPct:leerNum(document.getElementById("cosIibb").value.replace(".",",")),ganPct:leerNum(document.getElementById("cosGan").value.replace(".",",")),
+      tasas:leerNum(document.getElementById("cosTasas").value),costoInfUsd:leerNum(document.getElementById("cosInf").value),nota:document.getElementById("cosNota").value.trim(),pendVentas:leerPend()};
+    if(extra) extra(datos);
+    try{ COSTEOS_MANUAL=await guardarCosteoClave("COSTEOS_MANUAL",o=>{ o[cod]=datos; }); }
+    catch(e){ const m=document.getElementById("cosMsg"); if(m){m.className="updmsg err"; m.textContent="✗ No se pudo guardar: "+e.message;} return; }
+    renderCosteos(); const m=document.getElementById("cosMsg"); if(m){ m.className="updmsg ok"; m.textContent="✓ Guardado"; }
+  };
+  document.getElementById("cosGuardar").addEventListener("click",()=>guardar());
+  const add=document.getElementById("cosPvAdd"); if(add) add.addEventListener("click",()=>guardar(d=>d.pendVentas.push({concepto:"",ars:0})));
+  box.querySelectorAll(".cos-pv-x").forEach(b=>b.addEventListener("click",()=>guardar(d=>d.pendVentas.splice(+b.dataset.i,1))));
+  box.querySelectorAll(".cos-com").forEach(inp=>inp.addEventListener("change",async()=>{
+    try{ COSTEOS_COMENT=await guardarCosteoClave("COSTEOS_COMENT",o=>{ if(!o[cod]) o[cod]={}; const t=inp.value.trim(); if(t) o[cod][inp.dataset.p]=t; else delete o[cod][inp.dataset.p]; }); }
+    catch(e){ console.warn("comentario costeo:",e); }
+  }));
+}
+function exportCosteo(){
+  const cod=document.getElementById("cosProy").value; if(!cod) return;
+  const c=costeoCalcular(cod), E=XLSX_EST, cel=(v,s)=>({v,s});
+  const hdr=["Concepto","ARS","%","USD Oficial","TC impl.","USD Blue","TC impl.","AXI","%","AXI vs ARS"];
+  const fila=(lbl,v,tot,st,stt)=>({cells:[cel(lbl,stt||E.txt),cel(Math.round(v[0]),st||E.num),cel(tot&&tot[0]?v[0]/tot[0]:"",E.pct),cel(Math.round(v[1]),st||E.num),cel(Math.abs(v[1])>0.5?Math.round(v[0]/v[1]):"",E.num),cel(Math.round(v[2]),st||E.num),cel(Math.abs(v[2])>0.5?Math.round(v[0]/v[2]):"",E.num),cel(Math.round(v[3]),st||E.num),cel(tot&&tot[3]?v[3]/tot[3]:"",E.pct),cel(Math.abs(v[0])>0.5?(v[3]-v[0])/Math.abs(v[0]):"",E.pct)]});
+  const sec=t=>({cells:[cel(t,E.sec),...Array(9).fill(0).map(()=>cel("",E.sec))]});
+  const rows=[{cells:[cel(`Costeo ${cod} · ${(PROY_CTRL.proyectos[cod]||{}).desc||""} · resultado real`,E.title)],ht:22},{cells:[cel(`Descargado el ${new Date().toLocaleDateString("es-AR")}. Ingresos en positivo. Infraestructura ${c.mn.infraPct}%, IIBB ${c.mn.iibbPct}%, Ganancias ${c.mn.ganPct}%. Rojo = negativo.`,E.sub)]},{cells:hdr.map(h=>cel(h,E.head)),ht:28}];
+  rows.push(sec("Ingresos")); rows.push(fila("Facturado",c.facturado,c.ingresos)); c.pendV.forEach(p=>rows.push(fila("Pend. facturar · "+p.concepto,p.v,c.ingresos)));
+  rows.push(fila("Total ingresos",c.ingresos,null,E.numTot,E.txtTot));
+  rows.push(sec("Gastos")); c.lineasG.forEach(([l,v])=>rows.push(fila(l,v,c.gastos)));
+  rows.push(fila("Total gastos",c.gastos,null,E.numTot,E.txtTot)); rows.push(fila("Resultado",c.resultado,null,E.numTot,E.txtTot));
+  rows.push({cells:[]});
+  const comp=c.ocT-c.pfArs;
+  [["Gastos contables (costeo)",c.contable[0]],["CMV en EERR",c.eerrG],["Diferencia costeo vs EERR",c.contable[0]-c.eerrG],["OC Emitidas",c.ocT],["Pend. Facturar",c.pfArs],["Compras (Tango)",c.comprasArs],["OC − PF − Compras",comp-c.comprasArs],["Costo informado (US$)",+c.mn.costoInfUsd||0],["Costo real (US$ blue)",Math.round(c.gastos[2])]].forEach(([l,v])=>rows.push({cells:[cel(l,E.txt),cel(Math.round(v),E.num)]}));
+  const sh1={name:"Resumen",cols:[38,16,8,14,10,14,10,16,8,10],rows,freeze:{r:3,c:1},merges:["A1:J1","A2:J2"]};
+  const coms=COSTEOS_COMENT[cod]||{}, lista=proyDetalleProveedores(cod,PROY_CTRL.meses);
+  const r2=[{cells:[cel(`Diferencias OC vs contabilidad por proveedor · ${cod}`,E.title)],ht:22},{cells:["Proveedor","Compras (Tango)","OC Emitidas","Pend. Facturar","Comprometido","Diferencia","%","Comentario"].map(h=>cel(h,E.head)),ht:28}];
+  lista.forEach(p=>r2.push({cells:[cel(p.proveedor,E.txt),cel(Math.round(p.compras),E.num),cel(Math.round(p.oc),E.num),cel(Math.round(p.pf),E.num),cel(Math.round(p.comprometido),E.num),cel(Math.round(p.dif),Math.abs(p.pct)>=0.01&&Math.abs(p.dif)>=1?E.numOver:E.num),cel(p.pct,E.pct),cel(coms[p.proveedor]||"",E.txt)]}));
+  const sh2={name:"Control proveedores",cols:[14,16,16,16,16,16,8,50],rows:r2,freeze:{r:2,c:1},filter:{r0:1,c0:0,r1:r2.length-1,c1:7},merges:["A1:H1"]};
+  xlsxDescargar([sh1,sh2],"$",`costeo_${cod}.xlsx`);
+}
 /* ===== Proyectos a controlar (control mensual de imputacion, para Finanzas) =====
    Fuente: la apertura de Ventas/CMV (PROJ_DATA, la misma de la solapa Proyectos·CMV): proyectos PL/IF y
    centros compartidos (2) ACOPIO, 2) CONSUM, 2) EPP, ...) con ingresos o gastos imputados en el mes elegido.
@@ -5409,6 +5579,7 @@ async function onCargarInformeCrudo(file){
   initPtoApertura();
   initCMV();
   try{ PROY_REVISION=(await cargarClave("PROY_REVISION"))||{}; }catch(e){ console.warn("revision:",e); }
+  try{ const [cm,cc]=await Promise.all([cargarClave("COSTEOS_MANUAL"),cargarClave("COSTEOS_COMENT")]); COSTEOS_MANUAL=cm||{}; COSTEOS_COMENT=cc||{}; }catch(e){ console.warn("costeos:",e); }
   try{initProy();}catch(e){console.warn("proy:",e);}
   aplicarPermisosEerr();
 })();
