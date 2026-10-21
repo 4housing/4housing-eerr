@@ -2231,7 +2231,7 @@ window.exportarPtoDetalleExcel=exportarPtoDetalleExcel;
    para los informes "amigables" se arma el .xlsx a mano: XML de OOXML + zip sin compresion.
    sheets: [{name, cols:[anchos], rows:[{cells:[{v,s}|null], level, ht}], freeze:{r,c} (filas/columnas
    fijas), filter:{r0,c0,r1,c1} (0-based), merges:["A1:F1"]}]. Estilos (s): ver XLSX_EST. */
-const XLSX_EST={title:1,sub:2,head:3,headD:4,txt:5,txtTot:6,txtDet:7,num:8,numTot:9,numOver:10,numDet:11,pct:12,pctOver:13,sec:14,numSec:15,txtSec:16,numUnder:17};
+const XLSX_EST={title:1,sub:2,head:3,headD:4,txt:5,txtTot:6,txtDet:7,num:8,numTot:9,numOver:10,numDet:11,pct:12,pctOver:13,sec:14,numSec:15,txtSec:16,numUnder:17,numBold:18};
 function xlsxColL(c){ let s=""; c++; while(c>0){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26); } return s; }
 function xlsxEstiloXml(simb){
   const q=s=>s.replace(/"/g,"&quot;");
@@ -2245,7 +2245,7 @@ function xlsxEstiloXml(simb){
   const xf=(numFmt,font,fill,border,al)=>`<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="${border}" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${al||""}</xf>`;
   const L='<alignment vertical="center"/>', C='<alignment horizontal="center" vertical="center" wrapText="1"/>', D='<alignment vertical="center" indent="2"/>';
   const xfs=[xf(0,0,0,0),xf(0,1,0,0),xf(0,2,0,0),xf(0,3,2,1,C),xf(0,7,3,1,C),xf(0,0,0,1,L),xf(0,4,4,1,L),xf(0,5,0,1,D),
-    xf(164,0,0,1),xf(164,4,4,1),xf(164,4,5,1),xf(164,5,0,1),xf(165,0,0,1),xf(165,4,5,1),xf(0,7,6,1,L),xf(164,7,6,1),xf(0,7,6,1,L),xf(164,0,7,1)];
+    xf(164,0,0,1),xf(164,4,4,1),xf(164,0,5,1),xf(164,5,0,1),xf(165,0,0,1),xf(165,0,5,1),xf(0,7,6,1,L),xf(164,7,6,1),xf(0,7,6,1,L),xf(164,0,7,1),xf(164,4,0,1)];
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="${q(fNum)}"/><numFmt numFmtId="165" formatCode="${q(fPct)}"/></numFmts><fonts count="${fonts.length}">${fonts.join("")}</fonts><fills count="${fills.length}">${fills.join("")}</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>${B}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 }
 function xlsxHojaXml(sh){
@@ -2332,6 +2332,11 @@ function exportTablaXlsx(){
   const ths=[...headTr.children];
   const hdr=ths.map(th=>{ const c=th.cloneNode(true); c.querySelectorAll('span[onclick*="togglePtoDetalle"]').forEach(s=>s.remove()); c.querySelectorAll("br").forEach(b=>b.replaceWith(" ")); return c.textContent.replace(/[▼▲»«⇅↑↓]/g,"").replace(/\s+/g," ").trim(); });
   const esDesv=ths.map(th=>th.classList.contains("info")&&th.classList.contains("fzr"));
+  // En pantalla "Desvío últ. mes" y "Acum." son Real − Pto (positivo = excedido); en el Excel se invierten
+  // a Pto − Real, igual que la fila "Desvío (Pto − Real)": asi en todo el archivo rojo/negativo = excedido.
+  // Negrita solo en la columna de totales (y la fila TOTAL).
+  const idxTot=hdr.findIndex(h=>/^Total/i.test(h));
+  hdr.forEach((h,i)=>{ if(esDesv[i]) hdr[i]=h+" (Pto − Real)"; });
   const nCols=hdr.length, nFijas=ths.filter(th=>th.classList.contains("fz")).length||2;
   const titulo=`Presupuesto · ${selTxt("pBloque")} · ${selTxt("pResp")||"Todos los responsables"} · ${selTxt("pMoneda")} · ${selTxt("pDesde")} a ${selTxt("pHasta")}`;
   const rows=[
@@ -2356,7 +2361,7 @@ function exportTablaXlsx(){
       const n=esTexto?null:num(txt);
       let st;
       if(n!=null&&typeof n==="object") cells.push({v:n.pct,s:over?XLSX_EST.pctOver:XLSX_EST.pct});
-      else if(n!=null){ st=tot?XLSX_EST.numTot:over?XLSX_EST.numOver:det?XLSX_EST.numDet:XLSX_EST.num; cells.push({v:n,s:st}); }
+      else if(n!=null){ st=tot?XLSX_EST.numTot:over?XLSX_EST.numOver:ci===idxTot?XLSX_EST.numBold:det?XLSX_EST.numDet:XLSX_EST.num; cells.push({v:esDesv[ci]?-n:n,s:st}); }
       else { st=tot?XLSX_EST.txtTot:det&&td.classList.contains("fz1")?XLSX_EST.txtDet:XLSX_EST.txt; cells.push({v:esTexto?txt:(txt==="–"?"":txt),s:esTexto?st:(tot?XLSX_EST.numTot:det?XLSX_EST.numDet:XLSX_EST.num)}); }
       for(let k=1;k<span;k++) cells.push({v:"",s:tot?XLSX_EST.txtTot:XLSX_EST.txt});
       ci+=span;
