@@ -4838,23 +4838,38 @@ function convertirMontoOC(fecha,ars){
   const tcOfic=tcOficFor(dstr,"",ars,0), tcBill=tcBillFor(dstr,"",0), axiF=axiFactorFor(y);
   return [ars, tcOfic?ars/tcOfic:0, tcBill?ars/tcBill:0, axiF!=null?ars*axiF:0];
 }
+let OC_EXCLUIDAS={n:0,ars:0};
 function parseOCEmitidas(rows){
   const S=s=>(s==null?"":(""+s).trim());
   const N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
   const header=(rows[0]||[]).map(S);
   const idxDesc=header.indexOf("Descripci\u00F3n Clasificaci\u00F3n (Rengl\u00F3n)");
   const idxTotal=header.indexOf("Total");
-  const idxFecha=header.indexOf("Fecha de generaci\u00F3n");
+  // 2026-10-21: acepta tambien el "Informe APP Costeos" de Tango (fecha = "Fecha de emision", estado por
+  // renglon). Ese informe trae los renglones ANULADOS (ej. PL0030: un "AJUSTE CON NC" anulado de $42.245 M):
+  // se excluyen, igual que en el modelo de costeo (su hoja OCs solo tiene Cumplida/Emitida/Cerrada).
+  let idxFecha=header.indexOf("Fecha de generaci\u00F3n"); if(idxFecha<0) idxFecha=header.indexOf("Fecha de emisi\u00F3n");
   const idxProv=header.indexOf("C\u00F3d. proveedor");
   const idxOC=header.indexOf("Nro. Orden de Compra");
   const idxArt=header.indexOf("Descripci\u00F3n");
   const idxEstado=header.indexOf("Estado");
+  const idxEstadoRen=header.indexOf("Estado (rengl\u00F3n)");
+  // Renglones CERRADOS (se cerraron sin recibir/facturar todo): cuenta solo la parte facturada. El informe
+  // "OC Emitidas" de siempre ya trae el Total de esos renglones reducido a lo facturado; el "Informe APP
+  // Costeos" (se reconoce porque trae "Fecha de emision" y no "Fecha de generacion") trae el Total pedido
+  // completo, asi que ahi se prorratea: Total x Cant. facturada / Cant. pedida.
+  const esInfCosteos=header.indexOf("Fecha de generaci\u00F3n")<0&&header.indexOf("Fecha de emisi\u00F3n")>=0;
+  const idxCantPed=esInfCosteos?header.indexOf("Cantidad pedida"):-1, idxCantFac=esInfCosteos?header.indexOf("Cantidad Facturada"):-1;
   if(idxDesc<0||idxTotal<0) throw new Error('No encuentro las columnas "Descripci\u00F3n Clasificaci\u00F3n (Rengl\u00F3n)" y "Total" en el archivo.');
-  const agg={};
+  const agg={}; OC_EXCLUIDAS={n:0,ars:0};
   for(let i=1;i<rows.length;i++){
     const r=rows[i]; if(!r) continue;
     const m=S(r[idxDesc]).match(/^(PL|IF)\d+/); if(!m) continue;
-    const cod=m[0], fecha=idxFecha>=0?parseFechaCell(r[idxFecha]):null, v=convertirMontoOC(fecha,N(r[idxTotal]));
+    const est=S(idxEstadoRen>=0?r[idxEstadoRen]:(idxEstado>=0?r[idxEstado]:""));
+    if(/ANULAD/i.test(est)){ OC_EXCLUIDAS.n++; OC_EXCLUIDAS.ars+=N(r[idxTotal]); continue; }
+    let total=N(r[idxTotal]);
+    if(/CERRADA/i.test(est)&&idxCantPed>=0&&idxCantFac>=0){ const q=N(r[idxCantPed]); total=q?total*N(r[idxCantFac])/q:0; }
+    const cod=m[0], fecha=idxFecha>=0?parseFechaCell(r[idxFecha]):null, v=convertirMontoOC(fecha,total);
     if(!agg[cod]) agg[cod]={tot:[0,0,0,0],prov:{},det:[]};
     for(let k=0;k<4;k++) agg[cod].tot[k]+=v[k];
     const p=idxProv>=0?S(r[idxProv]):"";
@@ -5322,7 +5337,7 @@ async function onCargarInformeCrudo(file){
           Object.assign(destino,agg);
           await guardarClave(destino===PROY_CTRL_OC?"PROY_CTRL_OC":"PROY_CTRL_PF",destino);
           initProy();
-          msg.className="updmsg ok"; msg.textContent="✓ "+nombre+" actualizado: "+Object.keys(agg).length+" proyectos. Guardado en Supabase.";
+          msg.className="updmsg ok"; msg.textContent="✓ "+nombre+" actualizado: "+Object.keys(agg).length+" proyectos. Guardado en Supabase."+(parseFn===parseOCEmitidas&&OC_EXCLUIDAS.n?` Se excluyeron ${OC_EXCLUIDAS.n} renglones anulados ($ ${fmt(OC_EXCLUIDAS.ars)}).`:"");
         }catch(err){ msg.className="updmsg err"; msg.textContent="✗ Error al procesar "+nombre+": "+err.message; console.error(err); }
       };
       rd.onerror=()=>{msg.className="updmsg err"; msg.textContent="✗ No se pudo leer el archivo.";};
