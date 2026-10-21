@@ -377,6 +377,17 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
     <button class="btn updbtn" id="pyPfBtn" style="background:#3d5a80">⟳ Cargar OC Pend. de Facturar</button><input type="file" id="pyPfFile" accept=".xlsx" style="display:none">
     <span id="pyMsg" class="updmsg">Control Proyectos es independiente: no se actualiza solo al cargar el informe en "Estado de Resultados" (ahí te va a preguntar si también querés actualizarlo). Para verificar un archivo acá sin tocar el Estado de Resultados, usá "Cargar informe Tango (verificación)".</span>
   </div>
+  <div class="cmvctrl" id="pcBox">
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px">
+      <div><div class="cc-h" style="font-size:14px;margin:0">Proyectos a controlar</div><div class="note" style="font-size:11.5px">Control mensual de imputación: proyectos y centros asociados a Ventas / CMV con movimiento en el mes, contra OC.</div></div>
+      <div class="ctl"><label for="pcMes">Mes</label><select id="pcMes"></select></div>
+      <div class="ctl"><label for="pcFiltro">Mostrar</label><select id="pcFiltro"><option value="todos">Todos</option><option value="pend">Solo pendientes de revisar</option><option value="rev">Solo revisados</option></select></div>
+      <div class="ctl"><label>&nbsp;</label><button class="btn" id="pcXlsx">Descargar Excel</button></div>
+      <span id="pcResumen" class="updmsg"></span>
+    </div>
+    <div class="table-wrap"><table id="pcTabla"></table></div>
+    <div class="cc-note" id="pcNota"></div>
+  </div>
   <div class="kpis" id="pyKpis"></div>
   <div id="pyManual" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 2px"></div>
   <div class="table-wrap eerr-wrap"><table id="pyTabla"></table></div>
@@ -4877,6 +4888,113 @@ function parseOCPendFacturar(rows){
   }
   return agg;
 }
+/* ===== Proyectos a controlar (control mensual de imputacion, para Finanzas) =====
+   Fuente: la apertura de Ventas/CMV (PROJ_DATA, la misma de la solapa Proyectos·CMV): proyectos PL/IF y
+   centros compartidos (2) ACOPIO, 2) CONSUM, 2) EPP, ...) con ingresos o gastos imputados en el mes elegido.
+   Control contra OC (solo PL/IF: las OC se clasifican por proyecto): OC Emitidas - Pend. de Facturar vs
+   Compras contabilizadas en Tango, ACUMULADO (las OC son una foto al dia y su fecha no coincide con la de
+   la factura, asi que un control solo del mes daria diferencias falsas) -- mismo calculo que el
+   "Control de compras (OC)" de mas abajo. Revisado + comentario por proyecto y mes en eerr_estado
+   ('PROY_REVISION' = {mes:{codigo:{ok,comentario,por,fecha}}}); se guarda releyendo la clave antes,
+   para no pisar lo que haya marcado otra persona al mismo tiempo. Marcar requiere Editar en Control Proyectos. */
+let PROY_REVISION={};
+function pcFilas(mes){
+  const filas=[];
+  (PROJ_DATA.aperturas||[]).forEach(a=>{
+    const ing=((a.mov&&a.mov.INGRESOS&&a.mov.INGRESOS[mes])||[0])[0]||0;
+    const gas=((a.mov&&a.mov.GASTOS&&a.mov.GASTOS[mes])||[0])[0]||0;
+    if(Math.abs(ing)<0.5&&Math.abs(gas)<0.5) return;
+    const cod=a.codigo, esProy=/^(PL|IF)\d/.test(cod);
+    let oc=null;
+    if(esProy){
+      const ocT=((PROY_CTRL_OC[cod]||{}).tot||[0])[0]||0, pf=((PROY_CTRL_PF[cod]||{}).tot||[0])[0]||0;
+      const pr=PROY_CTRL.proyectos[cod]; const compras=pr&&pr.cats&&pr.cats["Compras"]?Object.values(pr.cats["Compras"]).reduce((x,v)=>x+(v[0]||0),0):0;
+      const comp=ocT-pf, dif=comp-compras; oc={comp,compras,dif,pct:ocT?dif/ocT:(compras?-1:0),hayOC:!!(ocT||pf)};
+    }
+    filas.push({cod,desc:a.desc||cod,esProy,ing,gas,res:ing+gas,oc,rev:(PROY_REVISION[mes]||{})[cod]||null});
+  });
+  filas.sort((a,b)=>(a.esProy===b.esProy?a.cod.localeCompare(b.cod,'es'):(a.esProy?-1:1)));
+  return filas;
+}
+function initProyControlar(){
+  const sel=document.getElementById("pcMes"); if(!sel) return;
+  const meses=(PROJ_DATA.meses||[]).filter(m=>(PROJ_DATA.aperturas||[]).some(a=>a.mov&&((a.mov.INGRESOS||{})[m]||(a.mov.GASTOS||{})[m])));
+  const cur=sel.value; sel.innerHTML="";
+  meses.slice().reverse().forEach(m=>sel.add(new Option(mesLabel(m),m)));
+  if(cur&&meses.includes(cur)) sel.value=cur;
+  if(!initProyControlar._wired){
+    initProyControlar._wired=true;
+    sel.addEventListener("change",renderProyControlar);
+    document.getElementById("pcFiltro").addEventListener("change",renderProyControlar);
+    document.getElementById("pcXlsx").addEventListener("click",exportProyControlar);
+  }
+  renderProyControlar();
+}
+function renderProyControlar(){
+  const tabla=document.getElementById("pcTabla"); if(!tabla) return;
+  const mes=document.getElementById("pcMes").value, filtro=document.getElementById("pcFiltro").value;
+  if(!mes){ tabla.innerHTML=""; document.getElementById("pcResumen").textContent="Todavía no hay datos de Ventas/CMV: se cargan con el crudo de Tango en Estado de Resultados."; return; }
+  const todas=pcFilas(mes), nRev=todas.filter(f=>f.rev&&f.rev.ok).length;
+  const filas=todas.filter(f=>filtro==="todos"||(filtro==="rev"?(f.rev&&f.rev.ok):!(f.rev&&f.rev.ok)));
+  const puede=puedeEditar("proy");
+  const cls=v=>v<0?' style="color:#b5462a"':'';
+  const n=v=>`<td class="fzr"${cls(v)}>${Math.abs(v)<0.5?"–":fmt(v)}</td>`;
+  let rows=filas.map(f=>{
+    const o=f.oc;
+    const sinArchivosOC=!Object.keys(PROY_CTRL_OC).length&&!Object.keys(PROY_CTRL_PF).length;
+    const ocCells=f.esProy&&sinArchivosOC?`<td class="fzr mut" colspan="4" style="text-align:center;opacity:.6">subí OC Emitidas y Pend. de Facturar para controlar</td>`:!f.esProy?`<td class="fzr mut" colspan="4" style="text-align:center;opacity:.6">sin OC por proyecto (centro compartido)</td>`
+      :(!o.hayOC&&!o.compras?`<td class="fzr mut" colspan="4" style="text-align:center;opacity:.6">sin OC ni compras cargadas</td>`
+      :`${n(o.comp)}${n(o.compras)}<td class="fzr ${Math.abs(o.pct)<0.01||Math.abs(o.dif)<1?"pos":"neg"}">${fmt(o.dif)}</td><td class="fzr ${Math.abs(o.pct)<0.01||Math.abs(o.dif)<1?"pos":"neg"}">${(o.pct*100).toFixed(1)}%</td>`);
+    const r=f.rev||{};
+    const quien=r.ok?`<span style="font-size:11px;opacity:.7">${esc(r.por||"")}${r.fecha?" · "+esc(r.fecha):""}</span>`:"";
+    return `<tr${r.ok?' style="background:#eef5ea"':''}>
+      <td class="fz1">${f.esProy?`<a href="#" class="pc-ver" data-c="${esc(f.cod)}" title="Ver el detalle de este proyecto abajo">${esc(f.desc)}</a>`:esc(f.desc)}</td>
+      <td>${f.esProy?"Proyecto":"Centro compartido"}</td>${n(f.ing)}${n(f.gas)}${n(f.res)}${ocCells}
+      <td style="text-align:center"><input type="checkbox" class="pc-ok" data-c="${esc(f.cod)}"${r.ok?" checked":""}${puede?"":" disabled"}></td>
+      <td><input type="text" class="txt pc-com" data-c="${esc(f.cod)}" value="${esc(r.comentario||"")}" placeholder="${puede?"Comentario…":""}" style="width:220px"${puede?"":" disabled"}></td>
+      <td>${quien}</td></tr>`;
+  }).join("");
+  const tot=k=>filas.reduce((x,f)=>x+f[k],0);
+  if(filas.length) rows+=`<tr class="result"><td class="fz1">TOTAL (${filas.length})</td><td></td>${n(tot("ing"))}${n(tot("gas"))}${n(tot("res"))}<td colspan="7"></td></tr>`;
+  tabla.innerHTML=`<thead><tr><th>Proyecto / centro</th><th>Tipo</th><th>Ingresos del mes</th><th>Gastos (CMV) del mes</th><th>Resultado del mes</th><th>OC − Pend. Fact. (acum.)</th><th>Compras Tango (acum.)</th><th>Diferencia</th><th>% s/ OC</th><th>Revisado</th><th>Comentario</th><th>Revisó</th></tr></thead><tbody>${rows||`<tr><td colspan="12" class="note">Nada para mostrar con este filtro.</td></tr>`}</tbody>`;
+  document.getElementById("pcResumen").textContent=`${mesLabel(mes)}: ${todas.length} con imputación · ${nRev} revisados · ${todas.length-nRev} pendientes`;
+  document.getElementById("pcNota").innerHTML=`Importes en ARS, como están imputados contablemente (ingresos en negativo, como en Tango). El control contra OC es acumulado (no del mes) y solo para PL/IF. Los datos de Ventas/CMV se actualizan cuando se carga el crudo en Estado de Resultados (último mes: ${esc(mesLabel((PROJ_DATA.meses||[]).slice(-1)[0]||""))}).${puede?"":" Para marcar revisados hace falta permiso de Editar en Control Proyectos."}`;
+  tabla.querySelectorAll(".pc-ver").forEach(a=>a.addEventListener("click",ev=>{ ev.preventDefault(); const s=document.getElementById("pyProy"); if([...s.options].some(o=>o.value===a.dataset.c)){ s.value=a.dataset.c; renderProyManual(); renderProy(); document.getElementById("pyDetalle").scrollIntoView({behavior:"smooth"}); } }));
+  if(puede){
+    tabla.querySelectorAll(".pc-ok").forEach(ch=>ch.addEventListener("change",()=>{ const com=tabla.querySelector(`.pc-com[data-c="${CSS.escape(ch.dataset.c)}"]`); guardarRevision(mes,ch.dataset.c,{ok:ch.checked,comentario:com?com.value:""}); }));
+    tabla.querySelectorAll(".pc-com").forEach(inp=>inp.addEventListener("change",()=>{ const ch=tabla.querySelector(`.pc-ok[data-c="${CSS.escape(inp.dataset.c)}"]`); guardarRevision(mes,inp.dataset.c,{ok:ch?ch.checked:false,comentario:inp.value}); }));
+  }
+}
+async function guardarRevision(mes,cod,{ok,comentario}){
+  if(!puedeEditar("proy")) return;
+  const msg=document.getElementById("pcResumen");
+  try{
+    const actual=(await cargarClave("PROY_REVISION"))||{}; // releer: no pisar lo que marco otra persona
+    if(!actual[mes]) actual[mes]={};
+    if(!ok&&!String(comentario||"").trim()) delete actual[mes][cod];
+    else actual[mes][cod]={ok:!!ok,comentario:String(comentario||"").trim(),por:PERM_EERR.nombre||"",fecha:new Date().toLocaleDateString("es-AR")};
+    await guardarClave("PROY_REVISION",actual);
+    PROY_REVISION=actual;
+  }catch(e){ console.warn("revision:",e); if(msg){ msg.className="updmsg err"; msg.textContent="✗ No se pudo guardar la revisión: "+e.message; } return; }
+  if(msg) msg.className="updmsg";
+  renderProyControlar();
+}
+function exportProyControlar(){
+  const mes=document.getElementById("pcMes").value; if(!mes) return;
+  const filtro=document.getElementById("pcFiltro").value;
+  const filas=pcFilas(mes).filter(f=>filtro==="todos"||(filtro==="rev"?(f.rev&&f.rev.ok):!(f.rev&&f.rev.ok)));
+  const E=XLSX_EST, hdr=["Código","Proyecto / centro","Tipo","Ingresos del mes","Gastos (CMV) del mes","Resultado del mes","OC − Pend. Fact. (acum.)","Compras Tango (acum.)","Diferencia","% s/ OC","Revisado","Comentario","Revisó","Fecha"];
+  const c=(v,st)=>({v,s:st});
+  const rows=[{cells:[c(`Proyectos a controlar · ${mesLabel(mes)} · en pesos`,E.title)],ht:22},{cells:[c("Proyectos y centros asociados a Ventas / CMV con imputación en el mes. Control contra OC acumulado y solo para PL/IF. Rojo = negativo.",E.sub)]},{cells:hdr.map(h=>c(h,E.head)),ht:30}];
+  const sinOC=!Object.keys(PROY_CTRL_OC).length&&!Object.keys(PROY_CTRL_PF).length;
+  filas.forEach(f=>{ const o=sinOC?null:f.oc, r=f.rev||{};
+    rows.push({cells:[c(f.cod,E.txt),c(f.desc,E.txt),c(f.esProy?"Proyecto":"Centro compartido",E.txt),c(Math.round(f.ing),E.num),c(Math.round(f.gas),E.num),c(Math.round(f.res),E.numBold),
+      c(o?Math.round(o.comp):"",E.num),c(o?Math.round(o.compras):"",E.num),c(o?Math.round(o.dif):"",o&&Math.abs(o.pct)>=0.01&&Math.abs(o.dif)>=1?E.numOver:E.num),c(o?o.pct:"",E.pct),
+      c(r.ok?"Sí":"",E.txt),c(r.comentario||"",E.txt),c(r.ok?r.por||"":"",E.txt),c(r.ok?r.fecha||"":"",E.txt)]}); });
+  const t=k=>Math.round(filas.reduce((x,f)=>x+f[k],0));
+  rows.push({cells:[c("TOTAL",E.txtTot),c("",E.txtTot),c("",E.txtTot),c(t("ing"),E.numTot),c(t("gas"),E.numTot),c(t("res"),E.numTot),...Array(8).fill(0).map(()=>c("",E.txtTot))]});
+  xlsxDescargar([{name:"Proyectos a controlar",cols:[12,34,16,16,16,16,18,18,15,9,10,36,22,11],rows,freeze:{r:3,c:2},filter:{r0:2,c0:0,r1:rows.length-1,c1:hdr.length-1},merges:["A1:N1","A2:N2"]}],"$",`proyectos_a_controlar_${mes}.xlsx`);
+}
 function initProy(){
   const sel=document.getElementById("pyProy"); if(!sel) return;
   const curSel=sel.value;
@@ -4902,6 +5020,7 @@ function initProy(){
   }
   renderProyManual();
   renderProy();
+  try{ initProyControlar(); }catch(e){ console.warn("proyectos a controlar:",e); }
 }
 function renderProyManual(){
   const box=document.getElementById("pyManual"); if(!box) return;
@@ -5274,6 +5393,7 @@ async function onCargarInformeCrudo(file){
   initPtoHist();
   initPtoApertura();
   initCMV();
+  try{ PROY_REVISION=(await cargarClave("PROY_REVISION"))||{}; }catch(e){ console.warn("revision:",e); }
   try{initProy();}catch(e){console.warn("proy:",e);}
   aplicarPermisosEerr();
 })();
