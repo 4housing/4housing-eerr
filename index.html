@@ -559,7 +559,64 @@ function renderCharts(pg,meses,bloques){
 }
 
 /* ===== tabs ===== */
-function showView(v){document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
+/* ===== Permisos por solapa (portal · Usuarios → Gestión · EERR → Ver / Editar) =====
+   Se leen de perfiles_sector.permisos (sector 'eerr') con el mismo criterio que admin.html del portal
+   (accesoEfectivo): sin listas guardadas, ver = todo y editar = todo salvo "Solo visión" (lector) y
+   "Miembro con edición" (editor, se tilda a mano); editar siempre dentro de ver. Dirección ve y edita todo.
+   OJO: esto oculta/bloquea en la pantalla; la base (RLS de eerr_estado) sigue permitiendo escribir a
+   cualquiera con el sector eerr -- endurecerlo es un SQL aparte. */
+const SECC_EERR=["eerr","pto","cmv","proy","dic"];
+const PERM_EERR={dir:true,ver:new Set(SECC_EERR),editar:new Set(SECC_EERR),cargo:"",nombre:""};
+const puedeVer=sec=>PERM_EERR.dir||PERM_EERR.ver.has(sec);
+const puedeEditar=sec=>PERM_EERR.dir||PERM_EERR.editar.has(sec);
+async function cargarPermisosEerr(){
+  try{
+    const {data}=await sbClient.auth.getSession(); const ses=data&&data.session; if(!ses) return;
+    const uid=ses.user.id, h={apikey:SB_KEY,Authorization:"Bearer "+ses.access_token};
+    PERM_EERR.nombre=ses.user.email||"";
+    const [rp,rs]=await Promise.all([
+      fetch(SB_REST+"/perfiles?select=nombre,es_direccion,activo&id=eq."+encodeURIComponent(uid),{headers:h}),
+      fetch(SB_REST+"/perfiles_sector?select=cargo,permisos&sector=eq.eerr&perfil_id=eq."+encodeURIComponent(uid),{headers:h})
+    ]);
+    if(!rp.ok||!rs.ok) throw new Error("perfiles "+rp.status+" / perfiles_sector "+rs.status);
+    const perfil=(await rp.json())[0]||null, fila=(await rs.json())[0]||null;
+    if(perfil&&perfil.nombre) PERM_EERR.nombre=perfil.nombre;
+    if(perfil&&perfil.es_direccion){ PERM_EERR.dir=true; PERM_EERR.cargo="Dirección"; return; }
+    PERM_EERR.dir=false;
+    const cargo=(fila&&fila.cargo)||"lector", perm=(fila&&fila.permisos)||{};
+    let ver=Array.isArray(perm.ver)?perm.ver.filter(x=>SECC_EERR.includes(x)):SECC_EERR.slice();
+    let editar=Array.isArray(perm.editar)?perm.editar.slice():((cargo==="lector"||cargo==="lectura"||cargo==="editor")?[]:SECC_EERR.slice());
+    if(cargo==="lector"||cargo==="lectura") editar=[];
+    editar=editar.filter(x=>ver.includes(x));
+    PERM_EERR.ver=new Set(ver); PERM_EERR.editar=new Set(editar);
+    PERM_EERR.cargo=({admin:"Admin",editor:"Miembro con edición",lector:"Solo visión",lectura:"Solo visión"})[cargo]||cargo;
+  }catch(e){
+    // Si no se pueden leer los permisos, se entra en modo consulta (ver todo, sin cargar ni editar nada).
+    console.warn("permisos EERR:",e);
+    PERM_EERR.dir=false; PERM_EERR.ver=new Set(SECC_EERR); PERM_EERR.editar=new Set(); PERM_EERR.cargo="Solo visión (no se pudieron leer los permisos)";
+  }
+}
+function aplicarPermisosEerr(){
+  const ocultar=(el,no)=>{ if(el) el.style.display=no?"none":""; };
+  const id=x=>document.getElementById(x);
+  document.querySelectorAll(".tab[data-v]").forEach(t=>ocultar(t,!puedeVer(t.dataset.v)));
+  // Crudo de Tango (alimenta todo) e histórico bloqueado: Editar en Estado de Resultados.
+  ocultar(id("updRawBtn")&&id("updRawBtn").closest(".updbar"),!puedeEditar("eerr"));
+  ocultar(id("histLockState")&&id("histLockState").closest(".updbar"),!puedeEditar("eerr"));
+  // Presupuesto: el desbloqueo con clave de Gerencia solo para quien tiene Editar en Presupuesto.
+  if(!puedeEditar("pto")){ ocultar(id("btnLock"),true); ocultar(id("lockKey"),true); if(typeof editable!=="undefined"&&editable) setLock(false); const st=id("lockState"); if(st) st.textContent="Solo lectura"; }
+  // Proyectos · CMV: desbloqueo y saldo anterior.
+  if(!puedeEditar("cmv")){ ocultar(id("cmvLockBtn"),true); ocultar(id("cmvLockKey"),true); const st=id("cmvLockState"); if(st) st.textContent="Solo lectura"; ocultar(id("saldoAntBtn")&&id("saldoAntBtn").parentNode,true); if(id("saldoAntBtn")) id("saldoAntBtn").disabled=true; }
+  // Control Proyectos: Tango (verificación), OC Emitidas y OC Pend. de Facturar.
+  ["pyCrudoBtn","pyOcBtn","pyPfBtn"].forEach(b=>{ ocultar(id(b),!puedeEditar("proy")); if(id(b)) id(b).disabled=!puedeEditar("proy"); });
+  // Diccionario: tabla TC por comprobante.
+  ocultar(id("tcOvBtn")&&id("tcOvBtn").closest(".updbar"),!puedeEditar("dic")); if(id("tcOvBtn")) id("tcOvBtn").disabled=!puedeEditar("dic");
+  if(id("updRawBtn")) id("updRawBtn").disabled=!puedeEditar("eerr");
+  const fu=document.querySelector(".foot-user"); if(fu) fu.textContent=(PERM_EERR.nombre||"")+(PERM_EERR.cargo&&!PERM_EERR.dir?" · "+PERM_EERR.cargo:"");
+  const vis=document.querySelector(".tab.active");
+  if(!vis||!puedeVer(vis.dataset.v)){ const pri=SECC_EERR.find(puedeVer); if(pri) showView(pri); }
+}
+function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
 // Sub-pestañas dentro de Presupuesto·Estructura: "Presupuesto" (la tabla) e "Historial de cambios"
 // (antes era una pestaña propia del nivel superior, pero ocupaba mucho lugar para algo que se usa
 // poco -- ahora vive adentro, sin competir con las pestañas principales).
@@ -589,6 +646,7 @@ function setLock(s){
 }
 function onLockClick(){
   if(editable){setLock(false);return;}
+  if(!puedeEditar("pto")) return;
   const inp=document.getElementById("lockKey");
   if(inp.style.display==="none"){inp.style.display="";inp.focus();return;}
   if(inp.value===CLAVE_GERENCIA)setLock(true);
@@ -2425,7 +2483,7 @@ function fmtTC(n){return (n||0).toLocaleString('es-AR',{minimumFractionDigits:2,
 function valCur(arr,cur,ym){if(!arr)return 0;let v;if(cur===0)v=arr[0];else if(cur===1)v=arr[1];else if(cur===2)v=arr[2];else v=arr[0]*(PROJ_DATA.mult[ym]||1);return SIGN*v;}
 function convAnt(ars,cur){if(cur===0)return ars;if(cur===1)return CONV.oficial?ars/CONV.oficial:0;if(cur===2)return CONV.blue?ars/CONV.blue:0;return ars*CONV.axi_mult;}
 function setLockCMV(s){editableCMV=s;const st=document.getElementById("cmvLockState"),b=document.getElementById("cmvLockBtn"),inp=document.getElementById("cmvLockKey");if(st)st.textContent=editableCMV?"Edici\u00f3n habilitada (Gerencia)":"Edici\u00f3n bloqueada";if(b){b.textContent=editableCMV?"Bloquear":"Desbloquear (Gerencia)";b.classList.toggle("open",editableCMV);}if(inp){inp.style.display="none";inp.value="";inp.placeholder="Clave";}renderCMV();}
-function onLockCMV(){if(editableCMV){setLockCMV(false);return;}const inp=document.getElementById("cmvLockKey");if(inp.style.display==="none"){inp.style.display="";inp.focus();return;}if(inp.value===CLAVE_GERENCIA)setLockCMV(true);else{inp.value="";inp.placeholder="Clave incorrecta";inp.focus();}}
+function onLockCMV(){if(editableCMV){setLockCMV(false);return;}if(!puedeEditar("cmv"))return;const inp=document.getElementById("cmvLockKey");if(inp.style.display==="none"){inp.style.display="";inp.focus();return;}if(inp.value===CLAVE_GERENCIA)setLockCMV(true);else{inp.value="";inp.placeholder="Clave incorrecta";inp.focus();}}
 function exportTablaGen(tid,fname){const t=document.getElementById(tid),rows=[];t.querySelectorAll("tr").forEach(tr=>{const head=tr.parentNode.tagName==="THEAD";let tds="";[...tr.children].forEach(td=>{const s=td.querySelector("select"),inp=td.querySelector("input");let v;if(s)v=s.value;else if(inp)v=inp.type==="checkbox"?(inp.checked?"S\u00ed":""):inp.value;else v=td.innerText.replace(/\s+/g," ").trim();let st="border:.5px solid #d8cba6;padding:4px 7px;";if(head)st+="background:#EDEBE1;font-weight:bold;text-align:center;";else st+=td.classList.contains("fzc")?"text-align:left;":"text-align:right;";const tag=head?"th":"td";tds+=`<${tag} style="${st}">${v}</${tag}>`;});rows.push(`<tr>${tds}</tr>`);});const html='<html><head><meta charset="utf-8"></head><body><table style="border-collapse:collapse;font-family:Calibri,Arial;font-size:11px">'+rows.join("")+'</table></body></html>';const blob=new Blob(['\uFEFF'+html],{type:"application/vnd.ms-excel"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=fname+".xls";document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);}
 function renderCMV(){
   renderCMVAvisos();
@@ -2628,6 +2686,7 @@ function renderHistLockUI(){
   }
 }
 function onHistLockAplicar(){
+  if(!puedeEditar("eerr")) return;
   const sel=document.getElementById("histLockMes"),inp=document.getElementById("histLockKey");
   if(inp.value!==CLAVE_GERENCIA){ inp.value=""; inp.placeholder="Clave incorrecta"; inp.focus(); return; }
   HIST_LOCK.hasta=sel.value||null;
@@ -5027,6 +5086,7 @@ function exportInformeDiferencias(){
 }
 async function onCargarInformeCrudo(file){
   const msgEl=document.getElementById("updMsg");
+  if(!puedeEditar("eerr")){ msgEl.className="updmsg err"; msgEl.textContent="Tu usuario no tiene permiso para cargar el crudo (Editar en Estado de Resultados)."; return; }
   msgEl.className="updmsg"; msgEl.textContent="Leyendo archivo...";
   try{
     const buf=await file.arrayBuffer();
@@ -5204,6 +5264,7 @@ async function onCargarInformeCrudo(file){
     setTimeout(()=>{const b=document.getElementById('authBtn');if(b)b.onclick=()=>location.reload();},50);
     return;
   }
+  await cargarPermisosEerr();
   await cargarTodoDesdeSupabase();
   // 2026-10-16: el diccionario (TC oficial/billete e indice FACPCE de la tabla de Compras) se lee de Supabase al
   // abrir la app -- antes solo se leia al cargar un crudo o al abrir la solapa Diccionario, y mientras tanto la app
@@ -5220,6 +5281,7 @@ async function onCargarInformeCrudo(file){
   initPtoApertura();
   initCMV();
   try{initProy();}catch(e){console.warn("proy:",e);}
+  aplicarPermisosEerr();
 })();
 </script>
 <script src="/portal/nav.js" defer></script>
