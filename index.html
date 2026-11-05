@@ -1337,6 +1337,13 @@ function detalleAperturaCuenta(cuenta){
       .filter(cta=>!APERTURA_CUENTA_REAL_A_VIRTUAL[normApertura(cta)])
       .flatMap(cta=>APERTURA_ESTRUCTURA_TOTAL[cta]);
   }
+  // Control Contenedores analiza Venta/Costo (Grupos B/C/G/I), no Estructura/NQN -- bypassa el filtro
+  // de mas abajo (que es especifico de Apertura de Estructura) y usa APERTURA_GRUPOS_PERMITIR solo.
+  if(CONTROL_CONTENEDORES_CUENTAS.includes(cuenta)){
+    const todo=APERTURA_DETALLE[cuenta]||[];
+    const permitir=APERTURA_GRUPOS_PERMITIR[cuenta];
+    return permitir&&permitir.length?todo.filter(t=>permitir.some(g=>normApertura(g)===normApertura(t.grupo))):todo;
+  }
   // 2026-10-06 (a pedido de Micaela): Apertura de Estructura analiza SOLO lo imputado a "K) ESTRUCTURA" y
   // "K) ESTRUCTURA NQN" (Aux 02), en todas las cuentas, incluida Cta Part Socios -- nada de A) CMV VENTA,
   // P) PROVEEDORES, M) INVERSIONES, O) IMPUESTOS, N) SUELDOS, etc. (eso va a un informe aparte que arma ella
@@ -1627,7 +1634,8 @@ function renderPtoApertura(){
   // Cuentas que abren por bien: cada transaccion se separa por auxiliar ANTES de totalizar, asi los filtros de
   // abajo (y todos los totales) cuentan lo mismo. Filtros "Cuenta contable real" y "Auxiliar" (ver arriba).
   const esBienesUso=!!APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta];
-  if(esBienesUso) txs=itemizarTxsPorAux(cuenta,txs);
+  const esContenedores=CONTROL_CONTENEDORES_CUENTAS.includes(cuenta);
+  if(esBienesUso||esContenedores) txs=itemizarTxsPorAux(cuenta,txs);
   const cuentaRealSel=(document.getElementById("paCuentaReal")||{}).value||"";
   const auxSel=esBienesUso?((document.getElementById("paAux")||{}).value||""):"";
   if(cuentaRealSel) txs=txs.filter(t=>t.cuenta===cuentaRealSel);
@@ -1636,6 +1644,7 @@ function renderPtoApertura(){
   // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
   // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
   const nBillAprox=cur===2?todasT.filter(t=>mesesSelSet.has(t.mes)&&t.usdBi==null).length:0;
+  if(esContenedores){ renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag); return; }
   const clasFn=CLASIF_APERTURA_FN[cuenta];
   if(!clasFn){
     document.getElementById("paKpis").innerHTML="";
@@ -1773,6 +1782,66 @@ function renderPtoApertura(){
   renderPtoAperturaPorConcepto(cuenta,grupoSel,mesesSel,cur);
   renderInformeEstructuraApertura(cuenta,grupoSel,mesesSel,cur,txs,cuentaRealSel,auxSel);
   sincronizarAnchoPtoConcepto();
+}
+/* Control Contenedores (a pedido de Micaela): "controlar el resultado de DTM/Alquileres... no debiera
+   tener ingresos por un contenedor sin gastos ni viceversa, para asegurarme de que haya un markup y no
+   hayamos omitido facturar nada a algún cliente". Una fila por contenedor/módulo (auxiliar "04 -
+   CONTENEDOR/MODULO") con Ingreso y Costo ACUMULADOS del período Desde/Hasta elegido (no mes a mes --
+   confirmado con Micaela: factura y costo de un mismo contenedor pueden caer en meses distintos sin que
+   sea un problema real, "sería más bien para el control de DTM y Logística"). Se marca el contenedor que
+   tiene uno de los dos en cero -- posible facturación olvidada o costo sin su contrapartida.
+   Signo: Ingreso = -saldo de la cuenta de Venta (Haber-heavy, negativo en el crudo) para mostrarlo
+   positivo, igual que Costeos (ver costeoCalcular); Costo = saldo de la cuenta de Gasto, ya positivo.
+   "txs" ya viene itemizado por contenedor (itemizarTxsPorAux, t.aux) y en la moneda elegida arriba. */
+function renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag){
+  document.getElementById("paPtoWrap").style.display="none";
+  document.getElementById("paPtoFoot").innerHTML="";
+  document.getElementById("paInfWrap").style.display="none";
+  document.getElementById("paInfFoot").innerHTML="";
+  const cfgG=CONTROL_CONTENEDORES_GRUPOS[cuenta];
+  const porCont={};
+  txs.forEach(t=>{
+    const k=t.aux||"(sin contenedor)";
+    if(!porCont[k]) porCont[k]={ingreso:0,costo:0,n:0,txs:[]};
+    const p=porCont[k];
+    if(normApertura(t.grupo)===normApertura(cfgG.venta)) p.ingreso+=-t.ars;
+    else if(normApertura(t.grupo)===normApertura(cfgG.costo)) p.costo+=t.ars;
+    p.n++; p.txs.push(t);
+  });
+  const esZero=v=>Math.abs(v)<0.5;
+  const alerta=k=>esZero(porCont[k].ingreso)!==esZero(porCont[k].costo);
+  // Alerta primero (lo que hay que revisar), despues por Resultado descendente.
+  const contenedores=Object.keys(porCont).sort((a,b)=>{
+    const al=(alerta(b)?1:0)-(alerta(a)?1:0); if(al) return al;
+    return (porCont[b].ingreso-porCont[b].costo)-(porCont[a].ingreso-porCont[a].costo);
+  });
+  let totIng=0,totCos=0,nAlertas=0;
+  const filas=contenedores.map(k=>{
+    const p=porCont[k], resultado=p.ingreso-p.costo, esAlerta=alerta(k);
+    totIng+=p.ingreso; totCos+=p.costo; if(esAlerta) nAlertas++;
+    const clave="CONT·"+k;
+    const abierto=estaAbiertoApertura(cuenta,clave);
+    const kEsc=esc(clave).replace(/'/g,"\\'"), cEsc=esc(cuenta).replace(/'/g,"\\'");
+    const flecha=`<span onclick="toggleResumenApertura('${cEsc}','${kEsc}')" title="${abierto?"Ocultar":"Ver"} detalle" style="cursor:pointer;padding:0 4px">${abierto?"▾":"▸"}</span>`;
+    const alertaTxt=esAlerta?` <span class="over">⚠ ${esZero(p.ingreso)?"sin ingreso":"sin costo"}</span>`:"";
+    const fila=`<tr class="result"><td class="fz fz1${esAlerta?" over":""}">${flecha}${esc(k)}${alertaTxt}</td><td class="fzr${signoCls(p.ingreso)}" style="text-align:right">${fmt(p.ingreso)}</td><td class="fzr${signoCls(p.costo)}" style="text-align:right">${fmt(p.costo)}</td><td class="fzr${signoCls(resultado)}" style="text-align:right"><b>${fmt(resultado)}</b></td><td class="fzr mut" style="text-align:right">${p.n}</td></tr>`;
+    if(!abierto) return fila;
+    const detalle=p.txs.slice().sort((x,y)=>(x.fecha||"").localeCompare(y.fecha||"")).map(t=>{
+      const esVenta=normApertura(t.grupo)===normApertura(cfgG.venta);
+      const monto=esVenta?-t.ars:t.ars;
+      const quien=t.razonSocial||t.origen||"(sin detalle)";
+      return `<tr><td class="fz fz1 ell" style="max-width:none;padding-left:22px" title="${esc(quien)}">${esc(t.fecha||t.mes)} · ${esVenta?"Venta":"Costo"} · ${esc(quien)} · ${esc(t.cuenta)}</td><td class="fzr${esVenta?signoCls(monto):""}" style="text-align:right">${esVenta?fmt(monto):"–"}</td><td class="fzr${esVenta?"":signoCls(monto)}" style="text-align:right">${esVenta?"–":fmt(monto)}</td><td class="fzr" style="text-align:right">–</td><td class="fzr mut" style="text-align:right">1</td></tr>`;
+    }).join("");
+    return fila+detalle;
+  }).join("")||'<tr><td colspan="5" class="mut" style="padding:16px">Sin movimientos en el período elegido.</td></tr>';
+  document.getElementById("paTabla").className="grid";
+  document.getElementById("paTabla").innerHTML=`<thead><tr><th class="fz fz1">Contenedor / Módulo</th><th class="fzr">Ingreso ${curTag}</th><th class="fzr">Costo ${curTag}</th><th class="fzr">Resultado</th><th class="fzr" style="max-width:64px">Asientos</th></tr></thead><tbody>${filas}</tbody>`;
+  colResizeInit(document.getElementById("paTabla"));
+  requestAnimationFrame(()=>{ actualizarStickyPto("paTabla"); actualizarStickyPtoDerecha("paTabla"); });
+  const resultadoTot=totIng-totCos;
+  document.getElementById("paKpis").innerHTML=`<div class="kpi"><div class="k-lbl">Ingreso del período</div><div class="k-val">${curLbl} ${fmtM(totIng)}</div></div><div class="kpi"><div class="k-lbl">Costo del período</div><div class="k-val">${curLbl} ${fmtM(totCos)}</div></div><div class="kpi"><div class="k-lbl">Resultado</div><div class="k-val">${curLbl} ${fmtM(resultadoTot)}</div></div><div class="kpi"><div class="k-lbl">Sin contrapartida</div><div class="k-val">${nAlertas} de ${contenedores.length}</div></div>`;
+  const desde=mesesSel[0]?mesLabel(mesesSel[0]):"", hasta=mesesSel[mesesSel.length-1]?mesLabel(mesesSel[mesesSel.length-1]):"";
+  document.getElementById("paFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">Ingreso y Costo de "${esc(cuenta)}" ACUMULADOS entre ${esc(desde)} y ${esc(hasta)} -- no mes a mes: un contenedor puede facturar en un mes y recibir su costo en otro, no es un problema. Cada fila es un contenedor/módulo (${esc(APERTURA_TIPO_AUX2[cuenta]||"")}); "(sin Aux 04)" junta lo que no tiene auxiliar cargado. Se marca <span class="over">⚠</span> el contenedor que tiene Ingreso o Costo pero no los dos -- puede ser facturación pendiente o un gasto sin su contrapartida. Ajustes Ctas (Q) queda afuera a propósito (ajuste contable de cierre). Hacé clic en la flecha para ver el detalle de cada movimiento.</div></details>`;
 }
 // Segunda tabla: Pto de CADA concepto mes a mes (no el real) -- muestra como se compone el Pto
 // agregado de arriba, con la escalada por inflación de cada vigencia (misma lógica que Presupuesto).
@@ -3246,6 +3315,18 @@ const APERTURA_CUENTAS_MAP={
   // "Patente Automotor RODADOS" (esa es la cuenta nueva que creó específicamente para vehículos, ya
   // incluida dentro de "Rodados"). "Multas" en cambio queda ligada a Rodados (ver más arriba).
   "Patentes":["Patentes"],
+  // Control Contenedores (a pedido de Micaela): 4 unidades de negocio donde Venta y Costo comparten el
+  // mismo auxiliar "04 - CONTENEDOR/MODULO" (confirmado con los archivos Control_DTM, Control_Logistica_
+  // Alquiler y Control_Modulos que pasó) -- cada una junta su(s) cuenta(s) de Venta y de Costo bajo una
+  // sola apertura "virtual", para poder cruzarlas por contenedor (ver CONTROL_CONTENEDORES_CUENTAS más
+  // abajo, que las separa del resto de Apertura de Estructura: no analizan Estructura/NQN, analizan
+  // Ingreso vs Costo). "Alquiler Módulo" deja afuera a propósito Bono Producción/Comisiones Alquileres/
+  // Impuestos y Tasas -- confirmado que esas 3 nunca traen un contenedor asociado (son costos generales
+  // de la operación, ya cubiertos aparte como sus propias cuentas simples de Estructura).
+  "DTM & Mantenimiento":["Venta Servicios de DTM & Mantenimiento","Gastos Servicios de DTM & Mantenimiento"],
+  "Logística Alquiler":["Venta Logistica Alquiler","Gastos de Transporte Alquiler"],
+  "Alquiler Módulo":["Venta Alquiler Modulos","Gastos Mantenimiento Modulos","Alquiler contenedores 3°"],
+  "Alquiler Reefer":["Venta Alquiler Modulos Reefer.","Gastos Mantenimiento Reefers"],
   "Cta Part Socios":[
     "Cta part Seoane Leandro","Cta part Pedretti Gustavo","Cta part Spinetto Pablo","Cta part Seoane Micaela",
     "Cta part Seoane Leandro (USD)","Cta part Pedretti Gustavo (USD)","Cta part Spinetto Pablo (USD)","Cta part Seoane Micaela (USD)"
@@ -3274,7 +3355,13 @@ const APERTURA_GRUPOS_PERMITIR={
   // "K) ESTRUCTURA NQN" (Rodados $1,9M, Bienes de Uso $900K) -- se incluye para no perderlos.
   "Rodados":["K) ESTRUCTURA","K) ESTRUCTURA NQN","M) INVERSIONES"],
   "Herramientas":["K) ESTRUCTURA","K) ESTRUCTURA NQN","M) INVERSIONES"],
-  "Mantenimiento Bs de Uso":["K) ESTRUCTURA","K) ESTRUCTURA NQN","M) INVERSIONES"]
+  "Mantenimiento Bs de Uso":["K) ESTRUCTURA","K) ESTRUCTURA NQN","M) INVERSIONES"],
+  // Control Contenedores: solo el Grupo de Venta y el de Costo de cada unidad -- Q) AJUSTES CTAS queda
+  // afuera (a pedido de Micaela: "es algo contable", no un ingreso/costo real de ningún contenedor).
+  "DTM & Mantenimiento":["G) VENTA SERV TERCERIZADOS","G) COSTO SERV TERCERIZADOS"],
+  "Logística Alquiler":["I) LOGISTICA INGRESOS","I) LOGISTICA EGRESOS"],
+  "Alquiler Módulo":["B) VENTA ALQUILER MODULO","B) COSTO ALQUILER MODULO"],
+  "Alquiler Reefer":["C) VENTA ALQUILER REEFER","C) COSTO ALQUILER REEFER"]
 };
 // Clave para cruzar una fila "02 - EERR" con su gemela de auxiliar secundario (ej. "06 - MUEBLES Y
 // UTILES"): mismo comprobante + misma cuenta + misma fecha -- verificado contra el archivo real que
@@ -3293,7 +3380,25 @@ const APERTURA_TIPO_AUX2={
   "Muebles y \u00DAtiles":"06 - MUEBLES Y UTILES",
   "Mantenimiento Bs de Uso":"05 - MANTENIMIENTO BS DE USO",
   "Herramientas":"07 - HERRAMIENTAS",
-  "Rodados":"08 - RODADOS"
+  "Rodados":"08 - RODADOS",
+  "DTM & Mantenimiento":"04 - CONTENEDOR/MODULO",
+  "Log\u00EDstica Alquiler":"04 - CONTENEDOR/MODULO",
+  "Alquiler M\u00F3dulo":"04 - CONTENEDOR/MODULO",
+  "Alquiler Reefer":"04 - CONTENEDOR/MODULO"
+};
+// Control Contenedores (a pedido de Micaela): controlar que todo Ingreso de un contenedor tenga su
+// Costo y viceversa, para no dejar facturaci\u00F3n sin hacer ni un gasto sin su contrapartida (markup de
+// DTM/Alquileres). Se analiza DISTINTO al resto de Apertura de Estructura (que mira Estructura/NQN de
+// una sola cuenta): ac\u00E1 se cruzan DOS Grupos (Venta y Costo) de la MISMA unidad de negocio, acumulado
+// del per\u00EDodo elegido (no mes a mes -- confirmado con Micaela: factura y costo de un mismo contenedor
+// pueden caer en meses distintos sin que sea un problema real). Ver detalleAperturaCuenta (bypassa el
+// filtro Estructura/NQN para estas 4) y renderControlContenedores.
+const CONTROL_CONTENEDORES_CUENTAS=["DTM & Mantenimiento","Log\u00EDstica Alquiler","Alquiler M\u00F3dulo","Alquiler Reefer"];
+const CONTROL_CONTENEDORES_GRUPOS={
+  "DTM & Mantenimiento":{venta:"G) VENTA SERV TERCERIZADOS",costo:"G) COSTO SERV TERCERIZADOS"},
+  "Log\u00EDstica Alquiler":{venta:"I) LOGISTICA INGRESOS",costo:"I) LOGISTICA EGRESOS"},
+  "Alquiler M\u00F3dulo":{venta:"B) VENTA ALQUILER MODULO",costo:"B) COSTO ALQUILER MODULO"},
+  "Alquiler Reefer":{venta:"C) VENTA ALQUILER REEFER",costo:"C) COSTO ALQUILER REEFER"}
 };
 function parseRawLedgerCuentas(rows){
   const S=s=>(s==null?"":(""+s).trim());
