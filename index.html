@@ -133,7 +133,7 @@ table.grid tr.result td.fzr{background:#EDEBE1;}
    de linea en vez de salirse de su caja -- antes un nombre largo ("MANTENIMIENTO ABC X 5 KG", "Gastos segun
    informe de Estructura", "Diferencia vs. Apertura (Estructura)") se escribia ENCIMA de los numeros del primer
    mes y no se leian. Con ancho fijo el texto completo queda visible en dos o tres lineas. */
-#paTabla td.fz1,#paPtoTabla td.fz1,#paInfTabla td.fz1{white-space:normal;overflow-wrap:anywhere;line-height:1.25;}
+#paTabla td.fz1,#paPtoTabla td.fz1,#paInfTabla td.fz1,#cmTabla td.fz1{white-space:normal;overflow-wrap:anywhere;line-height:1.25;}
 /* Lo mismo en Presupuesto·Estructura (cuentas largas como "Impuesto sobre Creditos Bancarios Ley 25413") y en
    Proyectos·CMV (nombres de proyecto como "PL0076 2 LA COMARCA RESTAURANTE"): antes se cortaban con "..." y no
    se podia leer el nombre completo salvo pasando el mouse. */
@@ -223,6 +223,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
       <button class="tab" data-v="pto">Presupuesto · Estructura</button>
       <button class="tab" data-v="cmv">Proyectos · CMV</button>
       <button class="tab" data-v="proy">Control Proyectos</button>
+      <button class="tab" data-v="modulos">Control Módulos</button>
       <button class="tab" data-v="costeos">Costeos</button>
       <button class="tab" data-v="dic">Diccionario</button>
     </nav>
@@ -395,6 +396,29 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   <div id="pyControl" class="cmvctrl"></div>
   <div id="pyDetalle" class="cmvctrl"></div>
   <div class="foot" id="pyFoot"></div>
+</div>
+
+<!-- Control Módulos (a pedido de Micaela, 2026-11-05): solapa propia, no adentro de Presupuesto·Estructura
+     -- "no lo veo dentro de Estructura Apertura, igual lo haría en solapa aparte". Mismo análisis Ingreso
+     vs Costo por contenedor que antes vivía como 4 cuentas de Apertura de Estructura (ver
+     CONTROL_CONTENEDORES_CUENTAS/GRUPOS y renderControlContenedores), ahora con sus propios controles. -->
+<div id="view-modulos" style="display:none">
+  <div class="controls">
+    <div class="ctl"><label for="cmCuenta">Unidad de negocio</label><select id="cmCuenta"></select></div>
+    <div class="ctl"><label for="cmCur">Moneda</label><select id="cmCur">
+      <option value="0" selected>Pesos ($)</option><option value="1">USD Oficial</option>
+      <option value="2">USD Billete</option><option value="3">Ajustado x inflación (AXI)</option></select></div>
+    <div class="ctl"><label for="cmDesde">Desde</label><select id="cmDesde"></select></div>
+    <div class="ctl"><label for="cmHasta">Hasta</label><select id="cmHasta"></select></div>
+    <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="ultimoAnioControlModulos()">Último año</button></div>
+    <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="autoFitTable('cmTabla')">Ajustar columnas</button></div>
+    <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="expandirTodoControlModulos()">Expandir todo</button></div>
+    <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="contraerTodoControlModulos()">Contraer todo</button></div>
+    <span class="note">Ingreso vs. Costo por contenedor/módulo, acumulado del período elegido (no mes a mes): no debería haber ingreso sin su costo, ni costo sin su ingreso.</span>
+  </div>
+  <div class="kpis" id="cmKpis"></div>
+  <div class="table-wrap" style="overflow:visible"><table id="cmTabla"></table></div>
+  <div class="foot" id="cmFoot"></div>
 </div>
 
 <div id="view-costeos" style="display:none">
@@ -585,7 +609,7 @@ function renderCharts(pg,meses,bloques){
    "Miembro con edición" (editor, se tilda a mano); editar siempre dentro de ver. Dirección ve y edita todo.
    OJO: esto oculta/bloquea en la pantalla; la base (RLS de eerr_estado) sigue permitiendo escribir a
    cualquiera con el sector eerr -- endurecerlo es un SQL aparte. */
-const SECC_EERR=["eerr","pto","cmv","proy","costeos","dic"];
+const SECC_EERR=["eerr","pto","cmv","proy","modulos","costeos","dic"];
 // Secciones sensibles: sin listas guardadas en el portal NO se ven (Dirección las habilita a mano).
 const SECC_EERR_SENSIBLES=new Set(["costeos"]);
 const PERM_EERR={dir:true,ver:new Set(SECC_EERR),editar:new Set(SECC_EERR),cargo:"",nombre:""};
@@ -638,7 +662,7 @@ function aplicarPermisosEerr(){
   const vis=document.querySelector(".tab.active");
   if(!vis||!puedeVer(vis.dataset.v)){ const pri=SECC_EERR.find(puedeVer); if(pri) showView(pri); }
 }
-function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-costeos").style.display=v==="costeos"?"":"none";if(v==="costeos")initCosteos();document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
+function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-modulos").style.display=v==="modulos"?"":"none";if(v==="modulos")renderControlModulos();document.getElementById("view-costeos").style.display=v==="costeos"?"":"none";if(v==="costeos")initCosteos();document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
 // Sub-pestañas dentro de Presupuesto·Estructura: "Presupuesto" (la tabla) e "Historial de cambios"
 // (antes era una pestaña propia del nivel superior, pero ocupaba mucho lugar para algo que se usa
 // poco -- ahora vive adentro, sin competir con las pestañas principales).
@@ -1480,7 +1504,9 @@ function ordenarCuentasApertura(lista){
 }
 function poblarCuentasApertura(){
   const sel=document.getElementById("paCuenta"); if(!sel) return;
-  const conDatos=APERTURA_CUENTAS.filter(c=>detalleAperturaCuenta(c).length>0);
+  // Control Módulos (DTM/Alquileres) tiene su propia solapa (ver CONTROL_CONTENEDORES_CUENTAS) -- a
+  // pedido de Micaela, no aparece acá en el desplegable de Apertura de Estructura.
+  const conDatos=APERTURA_CUENTAS.filter(c=>!CONTROL_CONTENEDORES_CUENTAS.includes(c)&&detalleAperturaCuenta(c).length>0);
   const lista=ordenarCuentasApertura(conDatos.length?conDatos:APERTURA_CUENTAS.slice());
   const firma=lista.join("\u241F");
   if(sel.dataset&&sel.dataset.firma===firma) return;
@@ -1634,8 +1660,7 @@ function renderPtoApertura(){
   // Cuentas que abren por bien: cada transaccion se separa por auxiliar ANTES de totalizar, asi los filtros de
   // abajo (y todos los totales) cuentan lo mismo. Filtros "Cuenta contable real" y "Auxiliar" (ver arriba).
   const esBienesUso=!!APERTURA_RESUMEN_POR_GRUPO_Y_CUENTA_REAL[cuenta];
-  const esContenedores=CONTROL_CONTENEDORES_CUENTAS.includes(cuenta);
-  if(esBienesUso||esContenedores) txs=itemizarTxsPorAux(cuenta,txs);
+  if(esBienesUso) txs=itemizarTxsPorAux(cuenta,txs);
   const cuentaRealSel=(document.getElementById("paCuentaReal")||{}).value||"";
   const auxSel=esBienesUso?((document.getElementById("paAux")||{}).value||""):"";
   if(cuentaRealSel) txs=txs.filter(t=>t.cuenta===cuentaRealSel);
@@ -1644,7 +1669,6 @@ function renderPtoApertura(){
   // Solo USD Billete puede quedar aproximado en transacciones cargadas antes de guardar la moneda (ver
   // monedaTxApertura): se avisa arriba de la tabla cuantas son, para que se vuelva a cargar ese crudo.
   const nBillAprox=cur===2?todasT.filter(t=>mesesSelSet.has(t.mes)&&t.usdBi==null).length:0;
-  if(esContenedores){ renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag); return; }
   const clasFn=CLASIF_APERTURA_FN[cuenta];
   if(!clasFn){
     document.getElementById("paKpis").innerHTML="";
@@ -1794,10 +1818,6 @@ function renderPtoApertura(){
    positivo, igual que Costeos (ver costeoCalcular); Costo = saldo de la cuenta de Gasto, ya positivo.
    "txs" ya viene itemizado por contenedor (itemizarTxsPorAux, t.aux) y en la moneda elegida arriba. */
 function renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag){
-  document.getElementById("paPtoWrap").style.display="none";
-  document.getElementById("paPtoFoot").innerHTML="";
-  document.getElementById("paInfWrap").style.display="none";
-  document.getElementById("paInfFoot").innerHTML="";
   const cfgG=CONTROL_CONTENEDORES_GRUPOS[cuenta];
   const porCont={};
   txs.forEach(t=>{
@@ -1834,15 +1854,61 @@ function renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag){
     }).join("");
     return fila+detalle;
   }).join("")||'<tr><td colspan="5" class="mut" style="padding:16px">Sin movimientos en el período elegido.</td></tr>';
-  document.getElementById("paTabla").className="grid";
-  document.getElementById("paTabla").innerHTML=`<thead><tr><th class="fz fz1">Contenedor / Módulo</th><th class="fzr">Ingreso ${curTag}</th><th class="fzr">Costo ${curTag}</th><th class="fzr">Resultado</th><th class="fzr" style="max-width:64px">Asientos</th></tr></thead><tbody>${filas}</tbody>`;
-  colResizeInit(document.getElementById("paTabla"));
-  requestAnimationFrame(()=>{ actualizarStickyPto("paTabla"); actualizarStickyPtoDerecha("paTabla"); });
+  document.getElementById("cmTabla").className="grid";
+  document.getElementById("cmTabla").innerHTML=`<thead><tr><th class="fz fz1">Contenedor / Módulo</th><th class="fzr">Ingreso ${curTag}</th><th class="fzr">Costo ${curTag}</th><th class="fzr">Resultado</th><th class="fzr" style="max-width:64px">Asientos</th></tr></thead><tbody>${filas}</tbody>`;
+  colResizeInit(document.getElementById("cmTabla"));
+  requestAnimationFrame(()=>{ actualizarStickyPto("cmTabla"); actualizarStickyPtoDerecha("cmTabla"); });
   const resultadoTot=totIng-totCos;
-  document.getElementById("paKpis").innerHTML=`<div class="kpi"><div class="k-lbl">Ingreso del período</div><div class="k-val">${curLbl} ${fmtM(totIng)}</div></div><div class="kpi"><div class="k-lbl">Costo del período</div><div class="k-val">${curLbl} ${fmtM(totCos)}</div></div><div class="kpi"><div class="k-lbl">Resultado</div><div class="k-val">${curLbl} ${fmtM(resultadoTot)}</div></div><div class="kpi"><div class="k-lbl">Sin contrapartida</div><div class="k-val">${nAlertas} de ${contenedores.length}</div></div>`;
+  document.getElementById("cmKpis").innerHTML=`<div class="kpi"><div class="k-lbl">Ingreso del período</div><div class="k-val">${curLbl} ${fmtM(totIng)}</div></div><div class="kpi"><div class="k-lbl">Costo del período</div><div class="k-val">${curLbl} ${fmtM(totCos)}</div></div><div class="kpi"><div class="k-lbl">Resultado</div><div class="k-val">${curLbl} ${fmtM(resultadoTot)}</div></div><div class="kpi"><div class="k-lbl">Sin contrapartida</div><div class="k-val">${nAlertas} de ${contenedores.length}</div></div>`;
   const desde=mesesSel[0]?mesLabel(mesesSel[0]):"", hasta=mesesSel[mesesSel.length-1]?mesLabel(mesesSel[mesesSel.length-1]):"";
-  document.getElementById("paFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">Ingreso y Costo de "${esc(cuenta)}" ACUMULADOS entre ${esc(desde)} y ${esc(hasta)} -- no mes a mes: un contenedor puede facturar en un mes y recibir su costo en otro, no es un problema. Cada fila es un contenedor/módulo (${esc(APERTURA_TIPO_AUX2[cuenta]||"")}); "(sin Aux 04)" junta lo que no tiene auxiliar cargado. Se marca <span class="over">⚠</span> el contenedor que tiene Ingreso o Costo pero no los dos -- puede ser facturación pendiente o un gasto sin su contrapartida. Ajustes Ctas (Q) queda afuera a propósito (ajuste contable de cierre). Hacé clic en la flecha para ver el detalle de cada movimiento.</div></details>`;
+  document.getElementById("cmFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">Ingreso y Costo de "${esc(cuenta)}" ACUMULADOS entre ${esc(desde)} y ${esc(hasta)} -- no mes a mes: un contenedor puede facturar en un mes y recibir su costo en otro, no es un problema. Cada fila es un contenedor/módulo (${esc(APERTURA_TIPO_AUX2[cuenta]||"")}); "(sin Aux 04)" junta lo que no tiene auxiliar cargado. Se marca <span class="over">⚠</span> el contenedor que tiene Ingreso o Costo pero no los dos -- puede ser facturación pendiente o un gasto sin su contrapartida. Ajustes Ctas (Q) queda afuera a propósito (ajuste contable de cierre). Hacé clic en la flecha para ver el detalle de cada movimiento.</div></details>`;
 }
+/* Control Módulos: solapa propia del nivel superior (a pedido de Micaela, 2026-11-05 -- "no lo veo
+   dentro de Estructura Apertura, igual lo haría en solapa aparte"). Antes vivía como 4 cuentas dentro
+   de Apertura de Estructura; el análisis y los números son EXACTAMENTE los mismos (misma
+   detalleAperturaCuenta/itemizarTxsPorAux/renderControlContenedores) -- lo único que cambió es que
+   ahora tiene sus propios controles (cmCuenta/cmCur/cmDesde/cmHasta), en vez de compartir el
+   desplegable "Cuenta contable" de Apertura. */
+function poblarMesesControlModulos(){
+  const cuenta=document.getElementById("cmCuenta").value;
+  const meses=mesesApertura(cuenta);
+  const pd=document.getElementById("cmDesde"),ph=document.getElementById("cmHasta");
+  pd.innerHTML="";ph.innerHTML="";
+  meses.forEach((m,i)=>{pd.add(new Option(mesLabel(m),i));ph.add(new Option(mesLabel(m),i));});
+  pd.value=indiceFechaBase(meses);ph.value=Math.max(0,meses.length-1);
+}
+function ultimoAnioControlModulos(){
+  aplicarUltimoAnio('cmDesde','cmHasta',mesesApertura(document.getElementById("cmCuenta").value),renderControlModulos);
+}
+window.ultimoAnioControlModulos=ultimoAnioControlModulos;
+function initControlModulos(){
+  const sel=document.getElementById("cmCuenta"); if(!sel) return;
+  CONTROL_CONTENEDORES_CUENTAS.forEach(c=>sel.add(new Option(c,c)));
+  poblarMesesControlModulos();
+  sel.addEventListener("change",()=>{poblarMesesControlModulos();renderControlModulos();});
+  document.getElementById("cmDesde").addEventListener("change",renderControlModulos);
+  document.getElementById("cmHasta").addEventListener("change",renderControlModulos);
+  document.getElementById("cmCur").addEventListener("change",renderControlModulos);
+  renderControlModulos();
+}
+function renderControlModulos(){
+  const sel=document.getElementById("cmCuenta"); if(!sel) return;
+  const cuenta=sel.value;
+  const todasT=detalleAperturaCuenta(cuenta);
+  const meses=mesesApertura(cuenta);
+  const pd=document.getElementById("cmDesde"),ph=document.getElementById("cmHasta");
+  if(pd.options.length!==meses.length) poblarMesesControlModulos();
+  const i0=+pd.value||0, i1=+ph.value||0;
+  const a=Math.min(i0,i1),b=Math.max(i0,i1);
+  const mesesSel=meses.slice(a,b+1);
+  const mesesSelSet=new Set(mesesSel);
+  const cur=+((document.getElementById("cmCur")||{}).value||0);
+  let txs=todasT.filter(t=>mesesSelSet.has(t.mes)).map(t=>convertirTxApertura(t,cur));
+  txs=itemizarTxsPorAux(cuenta,txs);
+  const curLbl=["$","US$","US$","$"][cur], curTag=["ARS","USD of.","USD bill.","AXI"][cur];
+  renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag);
+}
+window.renderControlModulos=renderControlModulos;
 // Segunda tabla: Pto de CADA concepto mes a mes (no el real) -- muestra como se compone el Pto
 // agregado de arriba, con la escalada por inflación de cada vigencia (misma lógica que Presupuesto).
 // Usa los conceptos que tienen Pto cargado (APERTURA_PTO), no los de la tabla de arriba -- para que
@@ -3897,7 +3963,9 @@ const APERTURA_RESUMEN_ABIERTO={};
 function toggleResumenApertura(cuenta,bucket){
   const k=cuenta+"|"+bucket;
   APERTURA_RESUMEN_ABIERTO[k]=!APERTURA_RESUMEN_ABIERTO[k];
-  renderPtoApertura();
+  // Control Módulos vive en su propia solapa (no en Apertura de Estructura) -- su flecha de detalle
+  // tiene que refrescar renderControlModulos, no renderPtoApertura.
+  if(CONTROL_CONTENEDORES_CUENTAS.includes(cuenta)) renderControlModulos(); else renderPtoApertura();
 }
 // "Expandir todo"/"Contraer todo" (a pedido de Micaela, para no tener que ir abriendo cada flecha una
 // por una en cuentas con muchos niveles como Mantenimiento Bs de Uso). APERTURA_FORZAR_ABIERTO es un
@@ -3925,6 +3993,20 @@ function contraerTodoApertura(){
 }
 window.contraerTodoApertura=contraerTodoApertura;
 window.toggleResumenApertura=toggleResumenApertura;
+// Mismo par "Expandir/Contraer todo" que Apertura, pero para Control Módulos (su propia solapa).
+function expandirTodoControlModulos(){
+  APERTURA_FORZAR_ABIERTO=true;
+  renderControlModulos();
+  APERTURA_FORZAR_ABIERTO=false;
+}
+window.expandirTodoControlModulos=expandirTodoControlModulos;
+function contraerTodoControlModulos(){
+  const cuenta=document.getElementById("cmCuenta").value;
+  const prefijo=cuenta+"|";
+  Object.keys(APERTURA_RESUMEN_ABIERTO).forEach(k=>{ if(k.startsWith(prefijo)) delete APERTURA_RESUMEN_ABIERTO[k]; });
+  renderControlModulos();
+}
+window.contraerTodoControlModulos=contraerTodoControlModulos;
 function filasAperturaResumenPorGrupo(cuenta,cfg,grupos,conceptos,mesesSel,prefijoClave){
   prefijoClave=prefijoClave||"";
   // Cuando esta anidado adentro de una cuenta real (prefijoClave truthy), se indenta un escalón más
@@ -5751,6 +5833,7 @@ async function onCargarInformeCrudo(file){
   initPto();
   initPtoHist();
   initPtoApertura();
+  initControlModulos();
   initCMV();
   try{ PROY_REVISION=(await cargarClave("PROY_REVISION"))||{}; }catch(e){ console.warn("revision:",e); }
   try{ const [cm,cc]=await Promise.all([cargarClave("COSTEOS_MANUAL"),cargarClave("COSTEOS_COMENT")]); COSTEOS_MANUAL=cm||{}; COSTEOS_COMENT=cc||{}; }catch(e){ console.warn("costeos:",e); }
