@@ -412,9 +412,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
     <div class="ctl"><label for="cmHasta">Hasta</label><select id="cmHasta"></select></div>
     <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="ultimoAnioControlModulos()">Último año</button></div>
     <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="autoFitTable('cmTabla')">Ajustar columnas</button></div>
-    <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="expandirTodoControlModulos()">Expandir todo</button></div>
-    <div class="ctl"><label>&nbsp;</label><button class="btn" onclick="contraerTodoControlModulos()">Contraer todo</button></div>
-    <span class="note">Ingreso vs. Costo por contenedor/módulo, acumulado del período elegido (no mes a mes): no debería haber ingreso sin su costo, ni costo sin su ingreso.</span>
+    <span class="note">Ingreso y Gasto por contenedor/módulo, mes a mes. La alerta ⚠ (sin ingreso/sin costo) se calcula sobre el acumulado del período elegido, no mes a mes.</span>
   </div>
   <div class="kpis" id="cmKpis"></div>
   <div class="table-wrap" style="overflow:visible"><table id="cmTabla"></table></div>
@@ -1817,51 +1815,59 @@ function renderPtoApertura(){
    Signo: Ingreso = -saldo de la cuenta de Venta (Haber-heavy, negativo en el crudo) para mostrarlo
    positivo, igual que Costeos (ver costeoCalcular); Costo = saldo de la cuenta de Gasto, ya positivo.
    "txs" ya viene itemizado por contenedor (itemizarTxsPorAux, t.aux) y en la moneda elegida arriba. */
+/* 2026-11-05 (a pedido de Micaela, reemplaza el formato anterior de una fila acumulada por contenedor):
+   "no me gusta así. Quiero ver todos los movimientos que hubo por trailer, en dos filas, Ingresos y
+   gastos, mes a mes." Ahora cada contenedor muestra sus DOS filas (Ingreso/Gasto) con una columna por
+   mes, igual que el resto de las tablas de Apertura -- sin necesidad de desplegar nada, todo visible de
+   entrada. El ⚠ "sin ingreso"/"sin costo" se sigue calculando sobre el ACUMULADO del período (no mes a
+   mes -- esa parte no cambió, "sería más bien para el control de DTM y Logística"), solo cambió cómo se
+   MUESTRA el detalle. */
 function renderControlContenedores(cuenta,txs,mesesSel,curLbl,curTag){
   const cfgG=CONTROL_CONTENEDORES_GRUPOS[cuenta];
   const porCont={};
   txs.forEach(t=>{
     const k=t.aux||"(sin contenedor)";
-    if(!porCont[k]) porCont[k]={ingreso:0,costo:0,n:0,txs:[]};
+    if(!porCont[k]) porCont[k]={ingreso:0,costo:0,ingresoMes:{},costoMes:{}};
     const p=porCont[k];
-    if(normApertura(t.grupo)===normApertura(cfgG.venta)) p.ingreso+=-t.ars;
-    else if(normApertura(t.grupo)===normApertura(cfgG.costo)) p.costo+=t.ars;
-    p.n++; p.txs.push(t);
+    if(normApertura(t.grupo)===normApertura(cfgG.venta)){
+      const v=-t.ars; p.ingreso+=v; p.ingresoMes[t.mes]=(p.ingresoMes[t.mes]||0)+v;
+    }else if(normApertura(t.grupo)===normApertura(cfgG.costo)){
+      p.costo+=t.ars; p.costoMes[t.mes]=(p.costoMes[t.mes]||0)+t.ars;
+    }
   });
   const esZero=v=>Math.abs(v)<0.5;
   const alerta=k=>esZero(porCont[k].ingreso)!==esZero(porCont[k].costo);
-  // Alerta primero (lo que hay que revisar), despues por Resultado descendente.
+  // Alerta primero (lo que hay que revisar), despues por Resultado descendente -- mismo criterio que antes.
   const contenedores=Object.keys(porCont).sort((a,b)=>{
     const al=(alerta(b)?1:0)-(alerta(a)?1:0); if(al) return al;
     return (porCont[b].ingreso-porCont[b].costo)-(porCont[a].ingreso-porCont[a].costo);
   });
   let totIng=0,totCos=0,nAlertas=0;
+  const filaMes=(label,porMes)=>{
+    const total=mesesSel.reduce((s,m)=>s+(porMes[m]||0),0);
+    const cells=mesesSel.map(m=>{ const v=porMes[m]||0; return `<td class="mescol${signoCls(v)}" style="text-align:right">${v?fmt(v):"–"}</td>`; }).join("");
+    return `<tr><td class="fz fz1" style="padding-left:18px">${label}</td>${cells}<td class="fzr${signoCls(total)}" style="text-align:right">${fmt(total)}</td></tr>`;
+  };
   const filas=contenedores.map(k=>{
-    const p=porCont[k], resultado=p.ingreso-p.costo, esAlerta=alerta(k);
+    const p=porCont[k], esAlerta=alerta(k);
     totIng+=p.ingreso; totCos+=p.costo; if(esAlerta) nAlertas++;
-    const clave="CONT·"+k;
-    const abierto=estaAbiertoApertura(cuenta,clave);
-    const kEsc=esc(clave).replace(/'/g,"\\'"), cEsc=esc(cuenta).replace(/'/g,"\\'");
-    const flecha=`<span onclick="toggleResumenApertura('${cEsc}','${kEsc}')" title="${abierto?"Ocultar":"Ver"} detalle" style="cursor:pointer;padding:0 4px">${abierto?"▾":"▸"}</span>`;
     const alertaTxt=esAlerta?` <span class="over">⚠ ${esZero(p.ingreso)?"sin ingreso":"sin costo"}</span>`:"";
-    const fila=`<tr class="result"><td class="fz fz1${esAlerta?" over":""}">${flecha}${esc(k)}${alertaTxt}</td><td class="fzr${signoCls(p.ingreso)}" style="text-align:right">${fmt(p.ingreso)}</td><td class="fzr${signoCls(p.costo)}" style="text-align:right">${fmt(p.costo)}</td><td class="fzr${signoCls(resultado)}" style="text-align:right"><b>${fmt(resultado)}</b></td><td class="fzr mut" style="text-align:right">${p.n}</td></tr>`;
-    if(!abierto) return fila;
-    const detalle=p.txs.slice().sort((x,y)=>(x.fecha||"").localeCompare(y.fecha||"")).map(t=>{
-      const esVenta=normApertura(t.grupo)===normApertura(cfgG.venta);
-      const monto=esVenta?-t.ars:t.ars;
-      const quien=t.razonSocial||t.origen||"(sin detalle)";
-      return `<tr><td class="fz fz1 ell" style="max-width:none;padding-left:22px" title="${esc(quien)}">${esc(t.fecha||t.mes)} · ${esVenta?"Venta":"Costo"} · ${esc(quien)} · ${esc(t.cuenta)}</td><td class="fzr${esVenta?signoCls(monto):""}" style="text-align:right">${esVenta?fmt(monto):"–"}</td><td class="fzr${esVenta?"":signoCls(monto)}" style="text-align:right">${esVenta?"–":fmt(monto)}</td><td class="fzr" style="text-align:right">–</td><td class="fzr mut" style="text-align:right">1</td></tr>`;
-    }).join("");
-    return fila+detalle;
-  }).join("")||'<tr><td colspan="5" class="mut" style="padding:16px">Sin movimientos en el período elegido.</td></tr>';
+    const cab=`<tr class="section"><td colspan="${mesesSel.length+2}"><span class="seclbl">${esc(k)}</span>${alertaTxt}</td></tr>`;
+    return cab+filaMes("Ingreso",p.ingresoMes)+filaMes("Gasto",p.costoMes);
+  }).join("")||`<tr><td colspan="${mesesSel.length+2}" class="mut" style="padding:16px">Sin movimientos en el período elegido.</td></tr>`;
+  const monthHdr=mesesSel.map(m=>`<th class="mescol">${mesLabel(m)}</th>`).join("");
   document.getElementById("cmTabla").className="grid";
-  document.getElementById("cmTabla").innerHTML=`<thead><tr><th class="fz fz1">Contenedor / Módulo</th><th class="fzr">Ingreso ${curTag}</th><th class="fzr">Costo ${curTag}</th><th class="fzr">Resultado</th><th class="fzr" style="max-width:64px">Asientos</th></tr></thead><tbody>${filas}</tbody>`;
+  document.getElementById("cmTabla").innerHTML=`<thead><tr><th class="fz fz1">Contenedor / Módulo</th>${monthHdr}<th class="fzr">Total ${curTag}</th></tr></thead><tbody>${filas}</tbody>`;
   colResizeInit(document.getElementById("cmTabla"));
   requestAnimationFrame(()=>{ actualizarStickyPto("cmTabla"); actualizarStickyPtoDerecha("cmTabla"); });
   const resultadoTot=totIng-totCos;
   document.getElementById("cmKpis").innerHTML=`<div class="kpi"><div class="k-lbl">Ingreso del período</div><div class="k-val">${curLbl} ${fmtM(totIng)}</div></div><div class="kpi"><div class="k-lbl">Costo del período</div><div class="k-val">${curLbl} ${fmtM(totCos)}</div></div><div class="kpi"><div class="k-lbl">Resultado</div><div class="k-val">${curLbl} ${fmtM(resultadoTot)}</div></div><div class="kpi"><div class="k-lbl">Sin contrapartida</div><div class="k-val">${nAlertas} de ${contenedores.length}</div></div>`;
   const desde=mesesSel[0]?mesLabel(mesesSel[0]):"", hasta=mesesSel[mesesSel.length-1]?mesLabel(mesesSel[mesesSel.length-1]):"";
-  document.getElementById("cmFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">Ingreso y Costo de "${esc(cuenta)}" ACUMULADOS entre ${esc(desde)} y ${esc(hasta)} -- no mes a mes: un contenedor puede facturar en un mes y recibir su costo en otro, no es un problema. Cada fila es un contenedor/módulo (${esc(APERTURA_TIPO_AUX2[cuenta]||"")}); "(sin Aux 04)" junta lo que no tiene auxiliar cargado. Se marca <span class="over">⚠</span> el contenedor que tiene Ingreso o Costo pero no los dos -- puede ser facturación pendiente o un gasto sin su contrapartida. Ajustes Ctas (Q) queda afuera a propósito (ajuste contable de cierre). Hacé clic en la flecha para ver el detalle de cada movimiento.</div></details>`;
+  // Nota especifica de Alquiler Modulo/Reefer (confirmado por Micaela): el mantenimiento es ocasional, solo
+  // cuando se devuelve el modulo para ponerlo a punto para el proximo alquiler (siempre a cargo de 4housing)
+  // -- "ingreso sin costo" ahi es lo esperable la mayoria de los meses, no una alerta real como en DTM/Logistica.
+  const notaAlquiler=(cuenta==="Alquiler Módulo"||cuenta==="Alquiler Reefer")?` En ${esc(cuenta)} el mantenimiento es ocasional -- solo cuando se devuelve el contenedor para ponerlo a punto para el próximo alquiler (siempre a cargo de 4housing) -- así que "sin costo" en la mayoría de los meses es lo esperable, no necesariamente un problema.`:"";
+  document.getElementById("cmFoot").innerHTML=`<details><summary style="cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Notas</summary><div style="margin-top:8px">Cada contenedor/módulo (${esc(APERTURA_TIPO_AUX2[cuenta]||"")}) con sus dos filas, Ingreso y Gasto, mes a mes entre ${esc(desde)} y ${esc(hasta)}; "(sin Aux 04)" junta lo que no tiene auxiliar cargado. El ⚠ se calcula sobre el ACUMULADO del período, no mes a mes: un contenedor puede facturar en un mes y recibir su costo en otro, no es un problema -- marca el que tiene Ingreso o Costo pero no los dos en todo el rango elegido. Ajustes Ctas (Q) queda afuera a propósito (ajuste contable de cierre).${notaAlquiler}</div></details>`;
 }
 /* Control Módulos: solapa propia del nivel superior (a pedido de Micaela, 2026-11-05 -- "no lo veo
    dentro de Estructura Apertura, igual lo haría en solapa aparte"). Antes vivía como 4 cuentas dentro
@@ -3963,9 +3969,7 @@ const APERTURA_RESUMEN_ABIERTO={};
 function toggleResumenApertura(cuenta,bucket){
   const k=cuenta+"|"+bucket;
   APERTURA_RESUMEN_ABIERTO[k]=!APERTURA_RESUMEN_ABIERTO[k];
-  // Control Módulos vive en su propia solapa (no en Apertura de Estructura) -- su flecha de detalle
-  // tiene que refrescar renderControlModulos, no renderPtoApertura.
-  if(CONTROL_CONTENEDORES_CUENTAS.includes(cuenta)) renderControlModulos(); else renderPtoApertura();
+  renderPtoApertura();
 }
 // "Expandir todo"/"Contraer todo" (a pedido de Micaela, para no tener que ir abriendo cada flecha una
 // por una en cuentas con muchos niveles como Mantenimiento Bs de Uso). APERTURA_FORZAR_ABIERTO es un
@@ -3993,20 +3997,6 @@ function contraerTodoApertura(){
 }
 window.contraerTodoApertura=contraerTodoApertura;
 window.toggleResumenApertura=toggleResumenApertura;
-// Mismo par "Expandir/Contraer todo" que Apertura, pero para Control Módulos (su propia solapa).
-function expandirTodoControlModulos(){
-  APERTURA_FORZAR_ABIERTO=true;
-  renderControlModulos();
-  APERTURA_FORZAR_ABIERTO=false;
-}
-window.expandirTodoControlModulos=expandirTodoControlModulos;
-function contraerTodoControlModulos(){
-  const cuenta=document.getElementById("cmCuenta").value;
-  const prefijo=cuenta+"|";
-  Object.keys(APERTURA_RESUMEN_ABIERTO).forEach(k=>{ if(k.startsWith(prefijo)) delete APERTURA_RESUMEN_ABIERTO[k]; });
-  renderControlModulos();
-}
-window.contraerTodoControlModulos=contraerTodoControlModulos;
 function filasAperturaResumenPorGrupo(cuenta,cfg,grupos,conceptos,mesesSel,prefijoClave){
   prefijoClave=prefijoClave||"";
   // Cuando esta anidado adentro de una cuenta real (prefijoClave truthy), se indenta un escalón más
