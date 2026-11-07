@@ -2809,13 +2809,22 @@ async function authToken(){
   try{const {data:{session}}=await sbClient.auth.getSession(); return (session&&session.access_token)||SB_KEY;}
   catch(e){return SB_KEY;}
 }
+// Devuelve {ok,clave,kb,error}: antes el error solo iba a la consola y el mensaje de carga decia
+// "Guardado en Supabase" igual (2026-11-07: Control Modulos volvia a 0 al refrescar sin que se viera
+// por que). Los que no miran el resultado siguen funcionando igual.
+let GUARDADO_FALLAS=[];
 async function guardarClave(clave,valor){
-  if(!sbClient) return;
+  if(!sbClient) return {ok:false,clave,error:"sin conexión"};
   const token=await authToken();
+  let kb=0; try{ kb=Math.round(JSON.stringify(valor).length/1024); }catch(_){}
   try{
     const res=await fetch(SB_REST+'/eerr_estado',{method:'POST',headers:{'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({clave,valor,actualizado_en:new Date().toISOString()})});
-    if(!res.ok) throw new Error('Supabase '+res.status+': '+await res.text());
-  }catch(e){ console.warn('No se pudo guardar "'+clave+'" en Supabase (existe la tabla eerr_estado?):',e); }
+    if(!res.ok) throw new Error('Supabase '+res.status+': '+(await res.text()).slice(0,200));
+    return {ok:true,clave,kb};
+  }catch(e){
+    console.warn('No se pudo guardar "'+clave+'" en Supabase ('+kb+' KB):',e);
+    const f={ok:false,clave,kb,error:String(e&&e.message||e)}; GUARDADO_FALLAS.push(f); return f;
+  }
 }
 async function cargarClave(clave){
   if(!sbClient) return null;
@@ -2900,7 +2909,8 @@ async function onCargarTcOverride(file){
   }
 }
 async function guardarTodoEnSupabase(){
-  await Promise.all([
+  GUARDADO_FALLAS=[];
+  const res=await Promise.all([
     guardarClave('DATA',{grupos:DATA.grupos,meses:DATA.meses}),
     guardarClave('CONFIG_PTO',CONFIG_PTO),
     guardarClave('PROJ_DATA',PROJ_DATA),
@@ -2920,6 +2930,7 @@ async function guardarTodoEnSupabase(){
     guardarClave('APERTURA_PTO',APERTURA_PTO),
     guardarClave('APERTURA_ESTRUCTURA_TOTAL',APERTURA_ESTRUCTURA_TOTAL),
   ]);
+  return res.filter(r=>r&&!r.ok);
 }
 window.guardarTodoEnSupabase=guardarTodoEnSupabase;
 /* 2026-10-16 (a pedido de Micaela): cuentas que se sacan de Presupuesto·Estructura. "Seguro Automotor"
@@ -5659,7 +5670,7 @@ async function onCargarInformeCrudo(file){
     const resC=parseRawLedgerCMV(rows);
     aplicarCMVDesdeCrudo(resC);
     msgEl.textContent="Guardando en Supabase...";
-    await guardarTodoEnSupabase();
+    const fallasGuardado=await guardarTodoEnSupabase();
     const f=document.getElementById("from"),t=document.getElementById("to");
     f.innerHTML="";t.innerHTML="";
     DATA.meses.forEach((m,i)=>{f.add(new Option(mesLabel(m),i));t.add(new Option(mesLabel(m),i));});
@@ -5701,8 +5712,9 @@ async function onCargarInformeCrudo(file){
     if(CUENTAS_NUEVAS_PTO.length) m2+=` ➕ ${CUENTAS_NUEVAS_PTO.length} cuenta(s) nueva(s) agregada(s) a Presupuesto·Estructura, sin responsable y con Pto 0: ${CUENTAS_NUEVAS_PTO.join(", ")}.`;
     m2+=" Proyectos/CMV actualizado: "+resC.aperturas.length+" aperturas (proyectos + buckets compartidos).";
     if(resC.avisos.length) m2+=` ⚠ ${resC.avisos.length} proyectos de Ventas/CMV (según Compras) con asientos mal clasificados en el 02-EERR: revisar en la pestaña Proyectos·CMV.`;
-    m2+=" Guardado en Supabase: la proxima vez que abras la app, ya va a estar cargado.";
-    msgEl.className="updmsg ok"; msgEl.textContent=m2;
+    if(fallasGuardado.length) m2+=` ⚠ NO SE PUDO GUARDAR EN SUPABASE: ${fallasGuardado.map(f=>`${f.clave} (${f.kb} KB): ${f.error}`).join(" | ")}. Lo que se ve ahora está bien, pero al refrescar la página esas partes vuelven a lo último guardado. Mandale este mensaje a soporte.`;
+    else m2+=" Guardado en Supabase: la proxima vez que abras la app, ya va a estar cargado.";
+    msgEl.className=fallasGuardado.length?"updmsg err":"updmsg ok"; msgEl.textContent=m2;
     console.log("Filas sin cotizacion completa:",res.sinCotiz);
     // Control Proyectos es independiente a propósito (sirve para verificar la carga, no tiene que
     // reflejar automáticamente lo mismo que ya cuadró en el EERR) -- se pregunta en vez de tocarlo solo.
