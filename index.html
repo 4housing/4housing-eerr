@@ -5330,7 +5330,9 @@ function modFicha(desc,cod){
 const modCodCli=i=>((MOD_PEDIDOS.codigos||[])[i])||((MOD_PEDIDOS.clientes||[])[i])||"";
 function modClienteHoy(f){
   // código de cliente del último pedido de alquiler del módulo (más corto que la razón social); si no hay, el depósito
-  const ped=modPedidosDe(f), ys=Object.keys(ped).sort(); if(ys.length){ const z=ped[ys[ys.length-1]][0]; return {cod:modCodCli(z[0]),nom:(MOD_PEDIDOS.clientes||[])[z[0]]||""}; }
+  // solo si el último pedido es reciente (últimos 2 meses con pedidos cargados); si no, puede ser de un cliente anterior
+  const ped=modPedidosDe(f), ys=Object.keys(ped).sort(), tope=modMesesTodos().slice(-2)[0]||"";
+  if(ys.length&&ys[ys.length-1]>=tope){ const z=ped[ys[ys.length-1]][0]; return {cod:modCodCli(z[0]),nom:(MOD_PEDIDOS.clientes||[])[z[0]]||""}; }
   return {cod:f.cliente,nom:f.cliente};
 }
 function modPedidosDe(f){
@@ -5630,7 +5632,11 @@ function modCtrlCalcular(mes){
     if(ped.length&&facNeta&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
     const explic=dif.length?(com[k]?"Comentario":(mv.length?(mv.some(r=>r[0].slice(0,7)===mes)?"Movimiento de series en el mes":"Movimiento de series posterior al cierre"):"")):"";
     const estado=!dif.length?"OK":(explic?"Explicado":"SIN EXPLICAR");
-    return {k,serie:s?s.serie:(ped[0]||fac[0])?k:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",cliPed:[...new Set(ped.map(z=>modCodCli(z[0])))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
+    // código de cliente del último pedido de alquiler del contenedor (más corto que el depósito / razón social)
+    // solo si el último pedido es reciente (este mes o el anterior); si no, puede ser de un cliente anterior
+    const pk=MOD_PEDIDOS.ped[k]||{}, ys=Object.keys(pk).filter(y=>y<=mes).sort(), yl=ys[ys.length-1], ult=yl&&yl>=modMesMas(mes,-1)?pk[yl][0]:null;
+    const codHoy=ult?modCodCli(ult[0]):"";
+    return {k,serie:s?s.serie:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",codHoy,cliPed:[...new Set(ped.map(z=>modCodCli(z[0])))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
       ped,impP,cub,fac,impF,mv,md,dif,avisos,explic,estado,com:com[k]||""};
   });
   // nombre legible para lo que no está en Series Activas: el del pedido/factura no lo trae; se deja el normalizado
@@ -5659,8 +5665,8 @@ function renderModCtrl(){
   const ver=filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
   const clsE=e=>e==="OK"?"pos":e==="Explicado"?"":"neg";
   const rows=ver.map(f=>`<tr><td class="fz1"><b>${esc(f.desc)}</b>${f.tipo?`<div class="note" style="font-size:10.5px">${esc(f.tipo)}</div>`:""}</td>
-    <td style="text-align:left;font-size:11.5px">${f.alq?"Sí · "+esc(f.dep):"<span style='opacity:.6'>No</span>"}</td>
-    <td style="text-align:left;font-size:11.5px">${f.ped.length?esc(f.cliPed)+" · "+f.ped.map(z=>"#"+esc(z[2])).join(" "):(f.cub.length?`<span title="pedido de ${f.cub[0][1]} meses">cubierto por pedido de ${esc(mesLabel(f.cub[0][0]))} (${f.cub[0][1]} m.)</span>`:"–")}</td>
+    <td style="text-align:left;font-size:11.5px" title="${esc(f.dep)}">${f.alq?"Sí · "+esc(f.codHoy||f.dep):"<span style='opacity:.6'>No</span>"}</td>
+    <td style="text-align:left;font-size:11.5px" title="${esc([...new Set(f.ped.map(z=>(MOD_PEDIDOS.clientes||[])[z[0]]||""))].join(", "))}">${f.ped.length?esc(f.cliPed)+" · "+f.ped.map(z=>"#"+esc(z[2])).join(" "):(f.cub.length?`<span title="pedido de ${f.cub[0][1]} meses">cubierto por pedido de ${esc(mesLabel(f.cub[0][0]))} (${f.cub[0][1]} m.)</span>`:"–")}</td>
     <td class="fzr">${f.impP?fmt(f.impP):"–"}</td>
     <td style="text-align:left;font-size:11.5px">${f.fac.length?esc(f.cliFac)+" · "+f.fac.map(z=>esc(z[3]+" "+z[0])).join(" "):"–"}</td>
     <td class="fzr">${f.impF?fmt(f.impF):"–"}</td>
