@@ -2826,6 +2826,33 @@ async function guardarClave(clave,valor){
     const f={ok:false,clave,kb,error:String(e&&e.message||e)}; GUARDADO_FALLAS.push(f); return f;
   }
 }
+/* 2026-11-07: APERTURA_DETALLE (~2,5 MB con el crudo abr-25..nov-26, desde que se sumaron las 4 cuentas de
+   Control Modulos) y APERTURA_AUX2_DETALLE (~1 MB) se guardan UNA FILA POR CUENTA ("APERTURA_DETALLE::Alquiler
+   Módulo", etc.) en vez de un solo valor gigante -- Control Modulos volvia a 0 al refrescar (lo vio Micaela).
+   Al leer: primero la clave vieja de un solo valor (si existe) y encima, cuenta por cuenta, las nuevas. La
+   "__indice__" lista las cuentas vigentes. */
+const SEP_CLAVE="::";
+async function guardarPorCuenta(base,obj){
+  const cuentas=Object.keys(obj);
+  const res=await Promise.all(cuentas.map(c=>guardarClave(base+SEP_CLAVE+c,obj[c])));
+  const idx=await guardarClave(base+SEP_CLAVE+"__indice__",cuentas);
+  const fallas=res.filter(r=>r&&!r.ok); if(idx&&!idx.ok) fallas.push(idx);
+  const kb=res.reduce((a,r)=>a+((r&&r.kb)||0),0);
+  return fallas.length?{ok:false,clave:`${base} (${fallas.length} de ${cuentas.length+1} partes: ${fallas.map(f=>f.clave.slice(base.length+SEP_CLAVE.length)).join(", ")})`,kb,error:fallas[0].error}:{ok:true,clave:base,kb};
+}
+async function cargarPorCuenta(base){
+  if(!sbClient) return null;
+  try{
+    const token=await authToken();
+    const res=await fetch(SB_REST+'/eerr_estado?select=clave,valor&clave=like.'+encodeURIComponent(base+SEP_CLAVE+'*'),{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+token}});
+    if(!res.ok) throw new Error('Supabase '+res.status);
+    const rows=await res.json(); if(!rows||!rows.length) return null;
+    const pre=base+SEP_CLAVE, out={}; let indice=null;
+    rows.forEach(r=>{ const c=String(r.clave).slice(pre.length); if(c==="__indice__") indice=r.valor; else out[c]=r.valor; });
+    if(Array.isArray(indice)) Object.keys(out).forEach(c=>{ if(!indice.includes(c)) delete out[c]; });
+    return out;
+  }catch(e){ console.warn('No se pudo leer "'+base+'" por cuenta de Supabase:',e); return null; }
+}
 async function cargarClave(clave){
   if(!sbClient) return null;
   try{
@@ -2923,8 +2950,8 @@ async function guardarTodoEnSupabase(){
     guardarClave('CMV_AVISOS',CMV_AVISOS),
     guardarClave('HIST_LOCK',HIST_LOCK),
     guardarClave('TC_COMPROBANTE_OVERRIDE',TC_COMPROBANTE_OVERRIDE),
-    guardarClave('APERTURA_DETALLE',APERTURA_DETALLE),
-    guardarClave('APERTURA_AUX2_DETALLE',APERTURA_AUX2_DETALLE),
+    guardarPorCuenta('APERTURA_DETALLE',APERTURA_DETALLE),
+    guardarPorCuenta('APERTURA_AUX2_DETALLE',APERTURA_AUX2_DETALLE),
     guardarClave('APERTURA_ORDEN',APERTURA_ORDEN),
     guardarClave('APERTURA_ORDEN_AUX0N',APERTURA_ORDEN_AUX0N),
     guardarClave('APERTURA_PTO',APERTURA_PTO),
@@ -2979,6 +3006,9 @@ async function cargarTodoDesdeSupabase(){
   if(apo){ Object.assign(APERTURA_ORDEN,apo); hubo=true; }
   if(appto){ Object.assign(APERTURA_PTO,appto); hubo=true; }
   if(apd2){ Object.assign(APERTURA_AUX2_DETALLE,apd2); hubo=true; }
+  { const [pc1,pc2]=await Promise.all([cargarPorCuenta('APERTURA_DETALLE'),cargarPorCuenta('APERTURA_AUX2_DETALLE')]);
+    if(pc1){ Object.assign(APERTURA_DETALLE,pc1); hubo=true; }
+    if(pc2){ Object.assign(APERTURA_AUX2_DETALLE,pc2); hubo=true; } }
   if(apoAux0N){ Object.assign(APERTURA_ORDEN_AUX0N,apoAux0N); hubo=true; }
   if(apet){ Object.assign(APERTURA_ESTRUCTURA_TOTAL,apet); hubo=true; }
   return hubo; // false = todavia no hay nada guardado, se queda con el historico de muestra embebido
