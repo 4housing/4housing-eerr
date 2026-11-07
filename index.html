@@ -406,11 +406,13 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   <div style="display:flex;gap:8px;margin:0 0 12px">
     <button class="subtab md-subbtn active" data-s="det" onclick="showModSub('det')">Por módulo</button>
     <button class="subtab md-subbtn" data-s="est" onclick="showModSub('est')">Estadística y gráficos</button>
+    <button class="subtab md-subbtn" data-s="ctrl" onclick="showModSub('ctrl')">Control de facturación</button>
     <button class="subtab md-subbtn" data-s="old" onclick="showModSub('old')">Ingreso vs costo (vista anterior)</button>
   </div>
   <div id="mdNuevo">
     <div class="updbar"><button class="btn updbtn" id="mdCargarBtn" style="background:#3d5a80">⟳ Cargar informes de módulos</button><input type="file" id="mdCargarFile" accept=".xlsx,.xlsm" multiple style="display:none"><span id="mdMsg" class="updmsg">Subí (podés elegir varios a la vez) Series Activas de Artículos, Precios por artículo, Pedidos y, una sola vez, el Histórico 2022-08 a 2025-03. Los movimientos del crudo se toman solos al cargarlo en Estado de Resultados. Se actualiza por mes cerrado, después del control de facturación.</span></div>
-    <div class="note" id="mdCargas" style="font-size:11.5px;margin:-4px 0 8px"></div>
+    <div class="note" id="mdCargas" style="font-size:11.5px;margin:-4px 0 8px;max-width:none"></div>
+    <div id="mdFiltrosWrap">
     <div class="controls">
       <div class="ctl"><label for="mdCur">Moneda</label><select id="mdCur"><option value="0" selected>Pesos ($)</option><option value="1">USD Oficial</option><option value="2">USD Billete</option><option value="3">Ajustado x inflación (AXI)</option></select></div>
       <div class="ctl"><label for="mdDesde">Desde</label><select id="mdDesde"></select></div>
@@ -425,6 +427,15 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
       <span style="font-size:12px;font-weight:600;color:var(--muted)">Categorías:</span><span id="mdCats"></span>
     </div>
     <div class="kpis" id="mdKpis"></div>
+    </div>
+    <div id="mdSubCtrl" style="display:none">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px">
+        <label class="ctl" style="flex-direction:row;align-items:center;gap:6px">Mes <select id="mdCtrlMes" onchange="renderModCtrl()"></select></label>
+        <label style="font-size:12.5px;display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="mdCtrlSolo" checked onchange="renderModCtrl()"> Solo diferencias y avisos</label>
+        <button class="btn" onclick="exportModCtrl()">Descargar Excel</button>
+      </div>
+      <div id="mdCtrlBody"></div>
+    </div>
     <div id="mdSubDet">
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px">
         <label class="ctl" style="flex-direction:row;align-items:center;gap:6px">Agrupar <select id="mdAgrupar"><option value="tipo" selected>Por tipología</option><option value="tam">Por tamaño / tipo</option><option value="no">Sin agrupar</option></select></label>
@@ -5235,9 +5246,11 @@ function modMergeMov(res){
 function modTipoArchivo(rows){
   const h=(rows[0]||[]).map(x=>String(x==null?"":x).trim());
   if(h.includes("Tipo de auxiliar")) return "mov";
+  if(h.includes("Movimiento")&&h.includes("Serie")&&h.includes("Comprobante")) return "movser"; // antes que Series Activas: también trae Serie y Descripción depósito
   if(h.includes("Serie")&&h.includes("Descripción depósito")) return "series";
   if(h.includes("Lista de precios")&&h.includes("Desc. Adicional")) return "precios";
   if(h.includes("FEC_ENTREG")&&h.includes("DESC_ADI")) return "pedidos";
+  if(h.includes("Descripción adicional")&&h.includes("Cotización")&&h.includes("Tipo comprobante")) return "fact";
   return null;
 }
 function modLeerSeries(rows){
@@ -5263,7 +5276,7 @@ function modLeerPedidos(rows){
     const serie=S(r[ix("DESC_ADI")]), f=parseFechaCell(r[ix("FEC_ENTREG")]); if(!serie||!f) return;
     const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0");
     const cli=S(r[ix("RAZON_SOCI")]); if(!(cli in cIdx)){ cIdx[cli]=clientes.length; clientes.push(cli); }
-    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[cli],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,"")]); n++;
+    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[cli],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")])]); n++;
   });
   return {clientes,ped,n};
 }
@@ -5390,7 +5403,7 @@ function modEstadoCarga(){
   const el=document.getElementById("mdCargas"); if(!el) return;
   const ns=Object.keys(MOD_MAESTRO.series||{}).length, np=Object.keys(MOD_MAESTRO.precios||{}).length, nped=Object.keys(MOD_PEDIDOS.ped||{}).length;
   const mm=MOD_MOV.meses||[];
-  el.innerHTML=`Movimientos: ${mm.length?esc(mesLabel(mm[0]))+" a "+esc(mesLabel(mm[mm.length-1])):"<b>sin datos</b>"} · Series Activas: ${ns?ns+" unidades"+(MOD_MAESTRO.fSeries?" ("+esc(MOD_MAESTRO.fSeries)+")":""):"<b>falta</b>"} · Precios: ${np?np+(MOD_MAESTRO.fPrecios?" ("+esc(MOD_MAESTRO.fPrecios)+")":""):"<b>falta</b>"} · Pedidos: ${nped?nped+" contenedores"+(MOD_PEDIDOS.fecha?" ("+esc(MOD_PEDIDOS.fecha)+")":""):"<b>falta</b>"}`;
+  el.innerHTML=`Movimientos: ${mm.length?esc(mesLabel(mm[0]))+" a "+esc(mesLabel(mm[mm.length-1])):"<b>sin datos</b>"} · Series Activas: ${ns?ns+" unidades"+(MOD_MAESTRO.fSeries?" ("+esc(MOD_MAESTRO.fSeries)+")":""):"<b>falta</b>"} · Precios: ${np?np+(MOD_MAESTRO.fPrecios?" ("+esc(MOD_MAESTRO.fPrecios)+")":""):"<b>falta</b>"} · Pedidos: ${nped?nped+" contenedores"+(MOD_PEDIDOS.fecha?" ("+esc(MOD_PEDIDOS.fecha)+")":""):"<b>falta</b>"} · Facturación (Res x Art): ${Object.keys(MOD_FACT.fact||{}).length?esc(MOD_FACT.fecha||"ok"):"<b>falta</b>"} · Mov. de series: ${(MOD_MOVSER.rows||[]).length?esc(MOD_MOVSER.fecha||"ok"):"<b>falta</b>"} · Modelos de pedido: ${Object.keys(MOD_MODELOS.series||{}).length?esc(MOD_MODELOS.fecha||"ok"):"<b>falta</b>"}`;
 }
 async function onCargarInformesModulos(ev){
   const files=[...ev.target.files]; ev.target.value=""; if(!files.length) return;
@@ -5400,17 +5413,21 @@ async function onCargarInformesModulos(ev){
   for(const file of files){
     try{
       const buf=await file.arrayBuffer(), wb=XLSX.read(buf,{type:"array",cellDates:true});
-      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true});
+      if(wb.SheetNames.includes("Renglones")&&wb.SheetNames.includes("Modelos de pedidos")){
+        const ser=modLeerModelos(wb); if(ser){ MOD_MODELOS={series:ser,fecha:hoy}; guardar.add("MODULOS_MODELOS"); partes.push(`✓ ${file.name}: ${Object.keys(ser).length} contenedores en modelos de pedido`); continue; } }
+      const rows=modRowsDeHoja(wb.Sheets[wb.SheetNames[0]]);
       const tipo=modTipoArchivo(rows);
       if(tipo==="mov"){ const r=modAgregarMov(rows); const n=modMergeMov(r); guardar.add("MODULOS_MOV"); partes.push(`✓ ${file.name}: ${n} movimientos de ${Object.keys(r.mods).length} módulos (${r.meses.length?mesLabel(r.meses[0])+" a "+mesLabel(r.meses[r.meses.length-1]):"sin meses"})`); }
       else if(tipo==="series"){ MOD_MAESTRO.series=modLeerSeries(rows); MOD_MAESTRO.fSeries=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.series).length} unidades (Series Activas)`); }
       else if(tipo==="precios"){ MOD_MAESTRO.precios=modLeerPrecios(rows); MOD_MAESTRO.fPrecios=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.precios).length} precios`); }
       else if(tipo==="pedidos"){ const r=modLeerPedidos(rows); MOD_PEDIDOS={clientes:r.clientes,ped:r.ped,fecha:hoy}; guardar.add("MODULOS_PEDIDOS"); partes.push(`✓ ${file.name}: ${r.n} pedidos de alquiler de ${Object.keys(r.ped).length} contenedores`); }
-      else partes.push(`✗ ${file.name}: no reconozco el informe (subí Series Activas, Precios por artículo, Pedidos, el crudo o el Histórico)`);
+      else if(tipo==="fact"){ const r=modLeerFact(rows); MOD_FACT={fact:r.fact,clientes:r.clientes,fecha:hoy}; guardar.add("MODULOS_FACT"); partes.push(`✓ ${file.name}: ${r.n} renglones de facturación de alquiler (${Object.keys(r.fact).length} contenedores)`); }
+      else if(tipo==="movser"){ MOD_MOVSER={rows:modLeerMovSeries(rows),fecha:hoy}; guardar.add("MODULOS_MOVSER"); partes.push(`✓ ${file.name}: ${MOD_MOVSER.rows.length} movimientos de series`); }
+      else partes.push(`✗ ${file.name}: no reconozco el informe (subí Series Activas, Precios por artículo, Pedidos, Res x Art Mensual, Movimientos de series, Modelos de pedidos, el crudo o el Histórico)`);
     }catch(e){ partes.push(`✗ ${file.name}: ${e.message}`); console.error(e); }
   }
   MOD_IDX=null;
-  const val={MODULOS_MOV:MOD_MOV,MODULOS_MAESTRO:MOD_MAESTRO,MODULOS_PEDIDOS:MOD_PEDIDOS};
+  const val={MODULOS_MOV:MOD_MOV,MODULOS_MAESTRO:MOD_MAESTRO,MODULOS_PEDIDOS:MOD_PEDIDOS,MODULOS_FACT:MOD_FACT,MODULOS_MOVSER:MOD_MOVSER,MODULOS_MODELOS:MOD_MODELOS};
   const res=await Promise.all([...guardar].map(k=>guardarClave(k,val[k])));
   const fallas=res.filter(r=>r&&!r.ok);
   msg.className=fallas.length||partes.some(p=>p.startsWith("✗"))?"updmsg err":"updmsg ok";
@@ -5424,7 +5441,10 @@ function renderModulos(){
   const fl=modFiltros();
   document.getElementById("mdSubDet").style.display=MOD_UI.sub==="det"?"":"none";
   document.getElementById("mdSubEst").style.display=MOD_UI.sub==="est"?"":"none";
+  document.getElementById("mdSubCtrl").style.display=MOD_UI.sub==="ctrl"?"":"none";
+  document.getElementById("mdFiltrosWrap").style.display=MOD_UI.sub==="ctrl"?"none":"";
   document.querySelectorAll(".md-subbtn").forEach(b=>b.classList.toggle("active",b.dataset.s===MOD_UI.sub));
+  if(MOD_UI.sub==="ctrl"){ renderModCtrl(); return; }
   if(MOD_UI.sub==="est"){ renderModulosEst(fl); return; }
   const filas=modFilas(fl);
   if(!fl.meses.length){ box.innerHTML='<div class="note">Todavía no hay movimientos de módulos: cargá el crudo (Estado de Resultados) o subí el Histórico / informes con "Cargar informes de módulos".</div>'; document.getElementById("mdKpis").innerHTML=""; return; }
@@ -5512,9 +5532,148 @@ function exportModulos(){
   const nC=hdr.length;
   xlsxDescargar([{name:"Módulos",cols:[18,11,30,16,12,13,13,24,13,20,32,...fl.meses.map(()=>13),15],rows,freeze:{r:3,c:1},filter:{r0:2,c0:0,r1:rows.length-1,c1:nC-1},merges:[`A1:${xlsxColL(Math.min(nC-1,14))}1`,`A2:${xlsxColL(Math.min(nC-1,14))}2`]}],s,`modulos_${fl.meses[0]}_${fl.meses[fl.meses.length-1]}.xlsx`);
 }
+/* ===== Control de facturación de alquileres (como Informe_Pedidos_Modelo de Micaela, 2026-11-07) =====
+   Para el mes elegido cruza, contenedor por contenedor:
+   - ALQUILADOS: Series Activas con depósito de cliente (no Stock / Venta / Uso interno / Perdido / Mantenimiento /
+     Bienes de uso). Es la foto del día en que se subió (se sube al cierre del mes).
+   - PEDIDOS del mes: alquiler (artículos VBA.. / VNQ..) con fecha de entrega en el mes, sin anulados. Un pedido de
+     N meses (cantidad N, ej. trimestral) cubre también los N-1 meses siguientes.
+   - FACTURACIÓN del mes: informe "Res x Art Mensual" (alquiler, por Descripción adicional = contenedor; N/C restan).
+   Cada contenedor queda OK (alquilado + pedido + factura) o con diferencia; una diferencia se considera EXPLICADA si el
+   contenedor tuvo movimiento de series en el mes (ALQ / DEV / TRA) o si se le cargó un comentario. Lo que queda
+   "SIN EXPLICAR" tiene que dar 0, igual que las celdas amarillas de la planilla. Además avisa si el modelo de pedido
+   está deshabilitado o falta, y si lo facturado difiere de lo pedido. */
+let MOD_FACT={fact:{},clientes:[],fecha:""}; // fact[serieNorm][mes]=[[comprobante,importe,idxCliente,tipo]]
+let MOD_MOVSER={rows:[],fecha:""};          // [fechaISO,comprobante,nro,movimiento,deposito,serie,articulo]
+let MOD_MODELOS={series:{},fecha:""};       // series[serieNorm]={mod,desc,hab,mon,precio,cant}
+let MOD_CTRL_COM={};                        // MODULOS_CTRL_COMENT {mes:{serieNorm:texto}}
+const MOD_ART_ALQ=/^V(BA|NQ)/i;
+function modRowsDeHoja(ws){
+  // Algunos informes de Tango traen mal la "dimension" de la hoja (dice A1:A1): se recalcula con las celdas reales.
+  let maxR=0,maxC=0; Object.keys(ws).forEach(k=>{ if(k[0]==="!") return; const c=XLSX.utils.decode_cell(k); if(c.r>maxR) maxR=c.r; if(c.c>maxC) maxC=c.c; });
+  ws["!ref"]=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:maxR,c:maxC}});
+  return XLSX.utils.sheet_to_json(ws,{header:1,raw:true});
+}
+function modLeerFact(rows){
+  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const fact={}, clientes=[], cIdx={}; let n=0;
+  rows.slice(1).forEach(r=>{ if(!r) return; if(!MOD_ART_ALQ.test(S(r[ix("Cód. Artículo")]))) return;
+    const serie=S(r[ix("Descripción adicional")])||S(r[ix("Sinónimo")]), f=parseFechaCell(r[ix("Fecha de emisión")]); if(!serie||!f) return;
+    const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0"), cli=S(r[ix("Cód. cliente")]);
+    if(!(cli in cIdx)){ cIdx[cli]=clientes.length; clientes.push(cli); }
+    const k=modNorm(serie), p=fact[k]||(fact[k]={}); (p[y]||(p[y]=[])).push([S(r[ix("Nro. comprobante")]),Math.round(N(r[ix("Total")])),cIdx[cli],S(r[ix("Tipo comprobante")])]); n++; });
+  return {fact,clientes,n};
+}
+function modLeerMovSeries(rows){
+  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim());
+  const out=[]; rows.slice(1).forEach(r=>{ if(!r) return; const f=parseFechaCell(r[ix("Fecha")]), serie=S(r[ix("Serie")]); if(!f||!serie) return;
+    out.push([f.toISOString().slice(0,10),S(r[ix("Comprobante")]),S(r[ix("Número")]).replace(/^0+/,""),S(r[ix("Movimiento")]),S(r[ix("Descripción depósito")]),serie,S(r[ix("Descripción")])]); });
+  return out;
+}
+function modLeerModelos(wb){
+  const hoja=n=>{ const ws=wb.Sheets[n]; return ws?modRowsDeHoja(ws):[]; };
+  const mods=hoja("Modelos de pedidos"), reng=hoja("Renglones"); if(!mods.length||!reng.length) return null;
+  const S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const hm=mods[0].map(S), m={}; mods.slice(1).forEach(r=>{ if(r&&r[0]) m[S(r[0])]={desc:S(r[hm.indexOf("Descripción")]),hab:S(r[hm.indexOf("Habilitado")]),mon:S(r[hm.indexOf("Código de moneda")])}; });
+  const hr=reng[0].map(S), series={};
+  reng.slice(1).forEach(r=>{ if(!r) return; const serie=S(r[hr.indexOf("Descripción adicional de artículo")]); if(!serie) return; const cod=S(r[hr.indexOf("Código")]), md=m[cod]||{};
+    series[modNorm(serie)]={mod:cod,desc:md.desc||"",hab:md.hab||"",mon:md.mon||"",precio:N(r[hr.indexOf("Precio")]),cant:N(r[hr.indexOf("Cantidad pedida")])}; });
+  return series;
+}
+function modCtrlMeses(){
+  const s=new Set(); Object.values(MOD_PEDIDOS.ped||{}).forEach(p=>Object.keys(p).forEach(y=>s.add(y))); Object.values(MOD_FACT.fact||{}).forEach(p=>Object.keys(p).forEach(y=>s.add(y)));
+  return [...s].filter(y=>y>="2025-01").sort();
+}
+const modMesMas=(y,k)=>{ const d=new Date(Date.UTC(+y.slice(0,4),+y.slice(5,7)-1+k,1)); return d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0"); };
+function modCtrlCalcular(mes){
+  const excl=/STOCK|^VENTA$|USO INTERNO|PERDIDO|MANTENIMIENTO|BIENES DE USO/i;
+  const alq={}; Object.entries(MOD_MAESTRO.series||{}).forEach(([k,s])=>{ if(s.dep&&!excl.test(s.dep)) alq[k]=s; });
+  const ix=modIndice(), canon=k=>{ const sk=ix.s[k]; return sk||k; };
+  const pedM={}, cubre={};
+  Object.entries(MOD_PEDIDOS.ped||{}).forEach(([k,p])=>{ const c=canon(k);
+    (p[mes]||[]).forEach(z=>{ (pedM[c]||(pedM[c]=[])).push(z); });
+    Object.entries(p).forEach(([y,l])=>{ if(y>=mes) return; l.forEach(z=>{ const cant=Math.round(+z[3]||1); if(cant>1&&modMesMas(y,cant-1)>=mes) (cubre[c]||(cubre[c]=[])).push([y,cant,z[2]]); }); }); });
+  const facM={}; Object.entries(MOD_FACT.fact||{}).forEach(([k,p])=>{ const c=canon(k); (p[mes]||[]).forEach(z=>(facM[c]||(facM[c]=[])).push(z)); });
+  // Movimientos del mes y, como Series Activas es la foto del día en que se subió, también los posteriores al cierre
+  // (ej. un contenedor devuelto en noviembre ya no figura alquilado en la foto aunque en octubre sí lo estaba).
+  const movM={}; (MOD_MOVSER.rows||[]).forEach(r=>{ if(r[0].slice(0,7)<mes) return; const c=canon(modNorm(r[5])); (movM[c]||(movM[c]=[])).push(r); });
+  const com=MOD_CTRL_COM[mes]||{}, clis=MOD_PEDIDOS.clientes||[], fclis=MOD_FACT.clientes||[];
+  const keys=new Set([...Object.keys(alq),...Object.keys(pedM),...Object.keys(facM)]);
+  const filas=[...keys].map(k=>{
+    const s=MOD_MAESTRO.series[k], a=!!alq[k], ped=pedM[k]||[], fac=facM[k]||[], cub=cubre[k]||[], mv=movM[k]||[], md=MOD_MODELOS.series[k]||MOD_MODELOS.series[modNorm(s&&s.alt)]||null;
+    const impP=ped.reduce((x,z)=>x+z[1],0), impF=fac.reduce((x,z)=>x+z[1],0);
+    const tienePed=ped.length>0||cub.length>0, facNeta=fac.length&&Math.abs(impF)>=1;
+    const dif=[];
+    if(a&&!tienePed) dif.push("Alquilado sin pedido");
+    if(a&&!fac.length&&!(cub.length&&!ped.length)) dif.push("Alquilado sin factura"); // un pedido de varios meses se factura en el mes del pedido
+    if(fac.length&&!facNeta) dif.push("Factura del mes anulada con N/C (neto 0)");
+    ped.filter(z=>z[4]&&!/cumplid/i.test(z[4])&&!fac.length).forEach(z=>dif.push(`Pedido #${z[2]} ${z[4].toLowerCase()} sin facturar`));
+    if(!a&&ped.length) dif.push("Pedido y no figura alquilado");
+    if(!a&&fac.length) dif.push("Facturado y no figura alquilado");
+    if(tienePed&&!fac.length&&!a) dif.push("Pedido sin factura");
+    if(ped.length>1) dif.push(`${ped.length} pedidos en el mes`);
+    const avisos=[];
+    if(a&&!md&&!/PROTOTIPO/i.test(k)) avisos.push("sin modelo de pedido");
+    // diferencias chicas son normales (pedido en US$ pasado a $ con el TC del día del pedido y factura con el de la factura)
+    if(ped.length&&facNeta&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
+    const explic=dif.length?(com[k]?"Comentario":(mv.length?(mv.some(r=>r[0].slice(0,7)===mes)?"Movimiento de series en el mes":"Movimiento de series posterior al cierre"):"")):"";
+    const estado=!dif.length?"OK":(explic?"Explicado":"SIN EXPLICAR");
+    return {k,serie:s?s.serie:(ped[0]||fac[0])?k:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",cliPed:[...new Set(ped.map(z=>clis[z[0]]||""))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
+      ped,impP,cub,fac,impF,mv,md,dif,avisos,explic,estado,com:com[k]||""};
+  });
+  // nombre legible para lo que no está en Series Activas: el del pedido/factura no lo trae; se deja el normalizado
+  const ordE={"SIN EXPLICAR":0,"Explicado":1,"OK":2};
+  filas.sort((x,y)=>(ordE[x.estado]-ordE[y.estado])||(y.avisos.length-x.avisos.length)||x.desc.localeCompare(y.desc,"es"));
+  const tot={alq:Object.keys(alq).length,ped:Object.keys(pedM).length,impP:filas.reduce((x,f)=>x+f.impP,0),fac:Object.keys(facM).length,impF:filas.reduce((x,f)=>x+f.impF,0),
+    ok:filas.filter(f=>f.estado==="OK").length,exp:filas.filter(f=>f.estado==="Explicado").length,sin:filas.filter(f=>f.estado==="SIN EXPLICAR"),av:filas.filter(f=>f.avisos.length).length};
+  return {filas,tot};
+}
+function renderModCtrl(){
+  const box=document.getElementById("mdCtrlBody"); if(!box) return;
+  const sel=document.getElementById("mdCtrlMes"), meses=modCtrlMeses();
+  if(sel.options.length!==meses.length){ const v=sel.value; sel.innerHTML=""; meses.slice().reverse().forEach(m=>sel.add(new Option(mesLabel(m),m))); if(v&&meses.includes(v)) sel.value=v; }
+  const mes=sel.value;
+  const falta=[!Object.keys(MOD_MAESTRO.series||{}).length&&"Series Activas",!Object.keys(MOD_PEDIDOS.ped||{}).length&&"Pedidos",!Object.keys(MOD_FACT.fact||{}).length&&"Res x Art Mensual (facturación)",!(MOD_MOVSER.rows||[]).length&&"Movimientos de series",!Object.keys(MOD_MODELOS.series||{}).length&&"Modelos de pedidos"].filter(Boolean);
+  if(!mes){ box.innerHTML=`<div class="note">Para el control subí con "Cargar informes de módulos": ${falta.join(", ")}.</div>`; return; }
+  const {filas,tot}=modCtrlCalcular(mes), solo=document.getElementById("mdCtrlSolo").checked, puede=puedeEditar("modulos");
+  const sinImp=tot.sin.reduce((x,f)=>x+Math.max(Math.abs(f.impP),Math.abs(f.impF)),0);
+  const cards=`<div class="cc-grid" style="margin:4px 0 10px">
+    <div class="cc-cell"><span>Alquilados (Series Activas al ${esc(MOD_MAESTRO.fSeries||"—")})</span><b>${tot.alq}</b></div>
+    <div class="cc-cell"><span>Pedidos de alquiler del mes</span><b>${tot.ped}</b><small>$ ${fmt(tot.impP)}</small></div>
+    <div class="cc-cell"><span>Facturado del mes</span><b>${tot.fac}</b><small>$ ${fmt(tot.impF)}</small></div>
+    <div class="cc-cell cc-ok"><span>OK</span><b>${tot.ok}</b><small>${tot.exp} con diferencia explicada</small></div>
+    <div class="cc-cell ${tot.sin.length?"cc-warn":"cc-ok"}"><span>SIN EXPLICAR (debe dar 0)</span><b>${tot.sin.length}</b><small>${tot.sin.length?"$ "+fmt(sinImp):"todo cuadra"}</small></div>
+    <div class="cc-cell ${tot.av?"cc-warn":""}"><span>Avisos (modelo / importe)</span><b>${tot.av}</b></div></div>`;
+  const ver=filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
+  const clsE=e=>e==="OK"?"pos":e==="Explicado"?"":"neg";
+  const rows=ver.map(f=>`<tr><td class="fz1"><b>${esc(f.desc)}</b>${f.tipo?`<div class="note" style="font-size:10.5px">${esc(f.tipo)}</div>`:""}</td>
+    <td style="text-align:left;font-size:11.5px">${f.alq?"Sí · "+esc(f.dep):"<span style='opacity:.6'>No</span>"}</td>
+    <td style="text-align:left;font-size:11.5px">${f.ped.length?esc(f.cliPed)+" · "+f.ped.map(z=>"#"+esc(z[2])).join(" "):(f.cub.length?`<span title="pedido de ${f.cub[0][1]} meses">cubierto por pedido de ${esc(mesLabel(f.cub[0][0]))} (${f.cub[0][1]} m.)</span>`:"–")}</td>
+    <td class="fzr">${f.impP?fmt(f.impP):"–"}</td>
+    <td style="text-align:left;font-size:11.5px">${f.fac.length?esc(f.cliFac)+" · "+f.fac.map(z=>esc(z[3]+" "+z[0])).join(" "):"–"}</td>
+    <td class="fzr">${f.impF?fmt(f.impF):"–"}</td>
+    <td style="text-align:left;font-size:11.5px">${f.md?esc(f.md.mod)+(/^no$/i.test(f.md.hab)?" (deshab.)":""):"–"}</td>
+    <td class="${clsE(f.estado)}" style="text-align:left;font-weight:600">${esc(f.estado)}</td>
+    <td style="text-align:left;font-size:11.5px">${esc(f.dif.join(" · "))}${f.avisos.length?`<div style="color:#b5462a">⚠ ${esc(f.avisos.join(" · "))}</div>`:""}${f.mv.length?`<div class="note" style="font-size:10.5px">Mov.: ${esc(f.mv.map(r=>`${r[1]} ${r[3]} ${r[4]} ${r[0].slice(8,10)}/${r[0].slice(5,7)}`).join(" | "))}</div>`:""}</td>
+    <td>${f.dif.length||f.com?`<input class="txt md-ctrl-com" data-k="${esc(f.k)}" value="${esc(f.com)}" placeholder="${puede?"Explicación…":""}" style="width:220px"${puede?"":" disabled"}>`:""}</td></tr>`).join("");
+  box.innerHTML=cards+(falta.length?`<div class="note" style="font-size:11.5px;margin-bottom:6px">⚠ Falta cargar: ${esc(falta.join(", "))} — el control puede dar diferencias falsas.</div>`:"")+
+    `<div class="table-wrap"><table id="mdCtrlTabla"><thead><tr><th class="fz1">Contenedor</th><th style="text-align:left">Alquilado (Series)</th><th style="text-align:left">Pedido del mes</th><th>Importe pedido</th><th style="text-align:left">Factura del mes</th><th>Importe facturado</th><th style="text-align:left">Modelo</th><th style="text-align:left">Estado</th><th style="text-align:left">Diferencia / movimiento</th><th style="text-align:left">Comentario</th></tr></thead><tbody>${rows||`<tr><td colspan="10" class="note">Sin diferencias: todo cuadra.</td></tr>`}</tbody></table></div>
+    <div class="foot">Alquilados = Series Activas con depósito de cliente (foto del día en que se subió: subila al cierre del mes). Pedido = alquiler con fecha de entrega en el mes (un pedido de N meses cubre los siguientes). Factura = Res x Art Mensual del mes (N/C restan). Una diferencia queda explicada si el contenedor tuvo movimiento de series en el mes (o después del cierre, hasta la foto de Series Activas) o si tiene comentario. El aviso de importe aparece si lo facturado difiere más de 3% de lo pedido.</div>`;
+  if(puede) box.querySelectorAll(".md-ctrl-com").forEach(inp=>inp.addEventListener("change",async()=>{
+    try{ const act=(await cargarClave("MODULOS_CTRL_COMENT"))||{}; if(!act[mes]) act[mes]={}; const t=inp.value.trim(); if(t) act[mes][inp.dataset.k]=t; else delete act[mes][inp.dataset.k];
+      await guardarClave("MODULOS_CTRL_COMENT",act); MOD_CTRL_COM=act; renderModCtrl(); }catch(e){ console.warn("comentario control:",e); } }));
+}
+function exportModCtrl(){
+  const mes=document.getElementById("mdCtrlMes").value; if(!mes) return;
+  const {filas,tot}=modCtrlCalcular(mes), E=XLSX_EST, c=(v,s)=>({v,s});
+  const hdr=["Contenedor","Tipología","Alquilado","Depósito / cliente","Cliente pedido","Pedidos","Importe pedido","Cubierto por pedido anterior","Cliente factura","Comprobantes","Importe facturado","Modelo","Habilitado","Estado","Diferencia","Avisos","Movimientos de series","Comentario"];
+  const rows=[{cells:[c(`Control de facturación de alquileres · ${mesLabel(mes)}`,E.title)],ht:22},{cells:[c(`Alquilados ${tot.alq} · Pedidos ${tot.ped} ($ ${fmt(tot.impP)}) · Facturados ${tot.fac} ($ ${fmt(tot.impF)}) · OK ${tot.ok} · Explicados ${tot.exp} · SIN EXPLICAR ${tot.sin.length}`,E.sub)]},{cells:hdr.map(h=>c(h,E.head)),ht:28}];
+  filas.forEach(f=>rows.push({cells:[c(f.desc,E.txt),c(f.tipo,E.txt),c(f.alq?"Sí":"No",E.txt),c(f.dep,E.txt),c(f.cliPed,E.txt),c(f.ped.map(z=>z[2]).join(" "),E.txt),c(f.impP,E.num),c(f.cub.length?`${mesLabel(f.cub[0][0])} (${f.cub[0][1]} m.)`:"",E.txt),c(f.cliFac,E.txt),c(f.fac.map(z=>z[3]+" "+z[0]).join(" "),E.txt),c(f.impF,E.num),c(f.md?f.md.mod:"",E.txt),c(f.md?f.md.hab:"",E.txt),c(f.estado,f.estado==="SIN EXPLICAR"?E.numOver:E.txt),c(f.dif.join(" · "),E.txt),c(f.avisos.join(" · "),E.txt),c(f.mv.map(r=>`${r[0]} ${r[1]} ${r[3]} ${r[4]}`).join(" | "),E.txt),c(f.com,E.txt)]}));
+  xlsxDescargar([{name:"Control facturación",cols:[18,28,9,26,26,16,14,18,14,30,14,12,10,14,34,34,40,30],rows,freeze:{r:3,c:1},filter:{r0:2,c0:0,r1:rows.length-1,c1:hdr.length-1},merges:["A1:R1","A2:R2"]}],"$",`control_facturacion_${mes}.xlsx`);
+}
 function showModSub(s){ MOD_UI.sub=s; if(s==="old"){ document.getElementById("mdNuevo").style.display="none"; document.getElementById("mdViejo").style.display=""; document.querySelectorAll(".md-subbtn").forEach(b=>b.classList.toggle("active",b.dataset.s==="old")); renderControlModulos(); return; }
   document.getElementById("mdNuevo").style.display=""; document.getElementById("mdViejo").style.display="none"; renderModulos(); }
-window.showModSub=showModSub;
+window.showModSub=showModSub; window.renderModCtrl=renderModCtrl; window.exportModCtrl=exportModCtrl;
 /* ===== Costeos (resultado real por proyecto) =====
    Replica el RESUMEN del modelo de costeo (PL0030_VDP_V04.xlsx) para el proyecto elegido, en 4 monedas:
    - Ingresos: facturado (filas 03 del proyecto con cuenta 4..., en positivo) + pendiente de facturar de
@@ -6249,6 +6408,8 @@ async function onCargarInformeCrudo(file){
   initPto();
   initPtoHist();
   initPtoApertura();
+  try{ const [mf,ms,mo,mc]=await Promise.all([cargarClave("MODULOS_FACT"),cargarClave("MODULOS_MOVSER"),cargarClave("MODULOS_MODELOS"),cargarClave("MODULOS_CTRL_COMENT")]);
+    if(mf) MOD_FACT=Object.assign({fact:{},clientes:[]},mf); if(ms) MOD_MOVSER=Object.assign({rows:[]},ms); if(mo) MOD_MODELOS=Object.assign({series:{}},mo); if(mc) MOD_CTRL_COM=mc; }catch(e){ console.warn("control facturacion:",e); }
   try{ const [mm,ma,mp]=await Promise.all([cargarClave("MODULOS_MOV"),cargarClave("MODULOS_MAESTRO"),cargarClave("MODULOS_PEDIDOS")]);
     if(mm){ MOD_MOV.meses=completarMeses(mm.meses||[]); MOD_MOV.mods=mm.mods||{}; MOD_MOV.ing=mm.ing||{}; }
     if(ma) MOD_MAESTRO=Object.assign({series:{},precios:{}},ma); if(mp) MOD_PEDIDOS=Object.assign({clientes:[],ped:{}},mp); MOD_IDX=null; }catch(e){ console.warn("modulos:",e); }
