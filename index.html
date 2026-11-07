@@ -5277,7 +5277,7 @@ function modLeerPedidos(rows){
     const serie=S(r[ix("DESC_ADI")]), f=parseFechaCell(r[ix("FEC_ENTREG")]); if(!serie||!f) return;
     const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0");
     const cod=S(r[ix("COD_CLIENT")]), cli=S(r[ix("RAZON_SOCI")]), kc=cod||cli; if(!(kc in cIdx)){ cIdx[kc]=clientes.length; clientes.push(cli); codigos.push(cod||cli); }
-    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[kc],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")])]); n++;
+    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[kc],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")]),(()=>{ const fp=parseFechaCell(r[ix("FEC_PEDIDO")]); return fp?fp.toISOString().slice(0,10):""; })()]); n++;
   });
   return {clientes,codigos,ped,n};
 }
@@ -5575,7 +5575,7 @@ function modLeerFact(rows){
     const serie=S(r[ix("Descripción adicional")])||S(r[ix("Sinónimo")]), f=parseFechaCell(r[ix("Fecha de emisión")]); if(!serie||!f) return;
     const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0"), cli=S(r[ix("Cód. cliente")]);
     if(!(cli in cIdx)){ cIdx[cli]=clientes.length; clientes.push(cli); }
-    const k=modNorm(serie), p=fact[k]||(fact[k]={}); (p[y]||(p[y]=[])).push([S(r[ix("Nro. comprobante")]),Math.round(N(r[ix("Total")])),cIdx[cli],S(r[ix("Tipo comprobante")])]); n++; });
+    const k=modNorm(serie), p=fact[k]||(fact[k]={}); (p[y]||(p[y]=[])).push([S(r[ix("Nro. comprobante")]),Math.round(N(r[ix("Total")])),cIdx[cli],S(r[ix("Tipo comprobante")]),N(r[ix("Cotización")]),S(r[ix("Lista de precios")])]); n++; });
   return {fact,clientes,n};
 }
 function modLeerMovSeries(rows){
@@ -5629,7 +5629,17 @@ function modCtrlCalcular(mes){
     const avisos=[];
     if(a&&!md&&!/PROTOTIPO/i.test(k)) avisos.push("sin modelo de pedido");
     // diferencias chicas son normales (pedido en US$ pasado a $ con el TC del día del pedido y factura con el de la factura)
-    if(ped.length&&facNeta&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
+    // Pedido de varios meses (generado antes del mes: una línea de entrega por mes) con lista en dólares: el importe del
+    // pedido quedó en pesos al TC del día del pedido y la factura sale al TC del día -> se compara en US$ (a pedido de
+    // Micaela): factura US$ (total / cotización de la factura) contra el precio en US$ del modelo de pedido (o, si no hay
+    // modelo en dólares, el de la lista de precios), por la cantidad de unidades facturadas (FAC menos N/C).
+    const pedViejo=ped.length&&ped.every(z=>z[5]&&z[5].slice(0,7)<mes), listaUsd=fac.length&&fac.every(z=>z[4]>1&&String(z[5])!=="1");
+    let refUsd=null; if(md&&/^DOL/i.test(md.mon)&&md.precio) refUsd=md.precio; else { const fi=modFicha(s?s.serie:k,""); if(fi.moneda==="US$"&&fi.precio) refUsd=fi.precio; }
+    if(ped.length&&facNeta&&pedViejo&&listaUsd&&refUsd){
+      const unid=Math.max(1,fac.filter(z=>!/^N\/?C/i.test(z[3])).length-fac.filter(z=>/^N\/?C/i.test(z[3])).length);
+      const fUsd=fac.reduce((x,z)=>x+z[1]/z[4],0), rUsd=refUsd*unid;
+      if(Math.abs(fUsd-rUsd)>Math.max(1,rUsd*0.03)) avisos.push(`facturado US$ ${fmt(fUsd)} vs precio US$ ${fmt(rUsd)} (${((fUsd/rUsd-1)*100).toFixed(1)}%; pedido de ${mesLabel(ped[0][5].slice(0,7))}, comparado en US$)`);
+    } else if(ped.length&&facNeta&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
     const explic=dif.length?(com[k]?"Comentario":(mv.length?(mv.some(r=>r[0].slice(0,7)===mes)?"Movimiento de series en el mes":"Movimiento de series posterior al cierre"):"")):"";
     const estado=!dif.length?"OK":(explic?"Explicado":"SIN EXPLICAR");
     // código de cliente del último pedido de alquiler del contenedor (más corto que el depósito / razón social)
@@ -5676,7 +5686,7 @@ function renderModCtrl(){
     <td>${f.dif.length||f.com?`<input class="txt md-ctrl-com" data-k="${esc(f.k)}" value="${esc(f.com)}" placeholder="${puede?"Explicación…":""}" style="width:220px"${puede?"":" disabled"}>`:""}</td></tr>`).join("");
   box.innerHTML=cards+(falta.length?`<div class="note" style="font-size:11.5px;margin-bottom:6px">⚠ Falta cargar: ${esc(falta.join(", "))} — el control puede dar diferencias falsas.</div>`:"")+
     `<div class="table-wrap"><table id="mdCtrlTabla"><thead><tr><th class="fz1">Contenedor</th><th style="text-align:left">Alquilado (Series)</th><th style="text-align:left">Pedido del mes</th><th>Importe pedido</th><th style="text-align:left">Factura del mes</th><th>Importe facturado</th><th style="text-align:left">Modelo</th><th style="text-align:left">Estado</th><th style="text-align:left">Diferencia / movimiento</th><th style="text-align:left">Comentario</th></tr></thead><tbody>${rows||`<tr><td colspan="10" class="note">Sin diferencias: todo cuadra.</td></tr>`}</tbody></table></div>
-    <div class="foot">Alquilados = Series Activas con depósito de cliente (foto del día en que se subió: subila al cierre del mes). Pedido = alquiler con fecha de entrega en el mes (un pedido de N meses cubre los siguientes). Factura = Res x Art Mensual del mes (N/C restan). Una diferencia queda explicada si el contenedor tuvo movimiento de series en el mes (o después del cierre, hasta la foto de Series Activas) o si tiene comentario. El aviso de importe aparece si lo facturado difiere más de 3% de lo pedido.</div>`;
+    <div class="foot">Alquilados = Series Activas con depósito de cliente (foto del día en que se subió: subila al cierre del mes). Pedido = alquiler con fecha de entrega en el mes (un pedido de N meses cubre los siguientes). Factura = Res x Art Mensual del mes (N/C restan). Una diferencia queda explicada si el contenedor tuvo movimiento de series en el mes (o después del cierre, hasta la foto de Series Activas) o si tiene comentario. El aviso de importe aparece si lo facturado difiere más de 3% de lo pedido (en US$ para pedidos de varios meses con lista en dólares).</div>`;
   if(puede) box.querySelectorAll(".md-ctrl-com").forEach(inp=>inp.addEventListener("change",async()=>{
     try{ const act=(await cargarClave("MODULOS_CTRL_COMENT"))||{}; if(!act[mes]) act[mes]={}; const t=inp.value.trim(); if(t) act[mes][inp.dataset.k]=t; else delete act[mes][inp.dataset.k];
       await guardarClave("MODULOS_CTRL_COMENT",act); MOD_CTRL_COM=act; renderModCtrl(); }catch(e){ console.warn("comentario control:",e); } }));
