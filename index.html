@@ -403,6 +403,44 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
      vs Costo por contenedor que antes vivía como 4 cuentas de Apertura de Estructura (ver
      CONTROL_CONTENEDORES_CUENTAS/GRUPOS y renderControlContenedores), ahora con sus propios controles. -->
 <div id="view-modulos" style="display:none">
+  <div style="display:flex;gap:8px;margin:0 0 12px">
+    <button class="subtab md-subbtn active" data-s="det" onclick="showModSub('det')">Por módulo</button>
+    <button class="subtab md-subbtn" data-s="est" onclick="showModSub('est')">Estadística y gráficos</button>
+    <button class="subtab md-subbtn" data-s="old" onclick="showModSub('old')">Ingreso vs costo (vista anterior)</button>
+  </div>
+  <div id="mdNuevo">
+    <div class="updbar"><button class="btn updbtn" id="mdCargarBtn" style="background:#3d5a80">⟳ Cargar informes de módulos</button><input type="file" id="mdCargarFile" accept=".xlsx,.xlsm" multiple style="display:none"><span id="mdMsg" class="updmsg">Subí (podés elegir varios a la vez) Series Activas de Artículos, Precios por artículo, Pedidos y, una sola vez, el Histórico 2022-08 a 2025-03. Los movimientos del crudo se toman solos al cargarlo en Estado de Resultados. Se actualiza por mes cerrado, después del control de facturación.</span></div>
+    <div class="note" id="mdCargas" style="font-size:11.5px;margin:-4px 0 8px"></div>
+    <div class="controls">
+      <div class="ctl"><label for="mdCur">Moneda</label><select id="mdCur"><option value="0" selected>Pesos ($)</option><option value="1">USD Oficial</option><option value="2">USD Billete</option><option value="3">Ajustado x inflación (AXI)</option></select></div>
+      <div class="ctl"><label for="mdDesde">Desde</label><select id="mdDesde"></select></div>
+      <div class="ctl"><label for="mdHasta">Hasta</label><select id="mdHasta"></select></div>
+      <div class="ctl"><label for="mdTam">Tamaño / tipo</label><select id="mdTam"></select></div>
+      <div class="ctl"><label for="mdUso">Uso</label><select id="mdUso"></select></div>
+      <div class="ctl"><label for="mdRegion">Región</label><select id="mdRegion"></select></div>
+      <div class="ctl"><label for="mdEstado">Estado hoy</label><select id="mdEstado"></select></div>
+      <div class="ctl"><label for="mdBuscar">Buscar</label><input id="mdBuscar" class="txt" style="width:170px" placeholder="contenedor, cliente, tipología"></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:-4px 0 10px">
+      <span style="font-size:12px;font-weight:600;color:var(--muted)">Categorías:</span><span id="mdCats"></span>
+    </div>
+    <div class="kpis" id="mdKpis"></div>
+    <div id="mdSubDet">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px">
+        <label class="ctl" style="flex-direction:row;align-items:center;gap:6px">Agrupar <select id="mdAgrupar"><option value="tipo" selected>Por tipología</option><option value="tam">Por tamaño / tipo</option><option value="no">Sin agrupar</option></select></label>
+        <label style="font-size:12.5px;display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="mdSoloPed"> Solo con pedido de alquiler en el período</label>
+        <button class="btn" id="mdExpandir">Expandir / contraer todo</button>
+        <button class="btn" id="mdXlsx">Descargar Excel</button>
+        <span class="note" style="font-size:11px">Clic en un módulo para ver el detalle por concepto y los pedidos.</span>
+      </div>
+      <div id="mdBody"></div>
+    </div>
+    <div id="mdSubEst" style="display:none">
+      <div style="margin:0 0 8px"><label class="ctl" style="flex-direction:row;align-items:center;gap:6px">Agrupar por <select id="mdDim" onchange="renderModulos()"><option value="tam" selected>Tamaño / tipo</option><option value="uso">Uso</option><option value="tipo">Tipología</option></select></label></div>
+      <div id="mdEstBody"></div>
+    </div>
+  </div>
+  <div id="mdViejo" style="display:none">
   <div class="controls">
     <div class="ctl"><label for="cmCuenta">Unidad de negocio</label><select id="cmCuenta"></select></div>
     <div class="ctl"><label for="cmCur">Moneda</label><select id="cmCur">
@@ -417,6 +455,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
   <div class="kpis" id="cmKpis"></div>
   <div class="table-wrap" style="overflow:visible"><table id="cmTabla"></table></div>
   <div class="foot" id="cmFoot"></div>
+  </div>
 </div>
 
 <div id="view-costeos" style="display:none">
@@ -660,7 +699,7 @@ function aplicarPermisosEerr(){
   const vis=document.querySelector(".tab.active");
   if(!vis||!puedeVer(vis.dataset.v)){ const pri=SECC_EERR.find(puedeVer); if(pri) showView(pri); }
 }
-function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-modulos").style.display=v==="modulos"?"":"none";if(v==="modulos")renderControlModulos();document.getElementById("view-costeos").style.display=v==="costeos"?"":"none";if(v==="costeos")initCosteos();document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
+function showView(v){if(!puedeVer(v))return;document.getElementById("view-eerr").style.display=v==="eerr"?"":"none";document.getElementById("view-pto").style.display=v==="pto"?"":"none";document.getElementById("view-cmv").style.display=v==="cmv"?"":"none";document.getElementById("view-proy").style.display=v==="proy"?"":"none";document.getElementById("view-modulos").style.display=v==="modulos"?"":"none";if(v==="modulos")(MOD_UI.sub==="old"?renderControlModulos():renderModulos());document.getElementById("view-costeos").style.display=v==="costeos"?"":"none";if(v==="costeos")initCosteos();document.getElementById("view-dic").style.display=v==="dic"?"":"none";document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.v===v));if(v==="dic")initDic();if(v==="pto")showPtoSub("main");}
 // Sub-pestañas dentro de Presupuesto·Estructura: "Presupuesto" (la tabla) e "Historial de cambios"
 // (antes era una pestaña propia del nivel superior, pero ocupaba mucho lugar para algo que se usa
 // poco -- ahora vive adentro, sin competir con las pestañas principales).
@@ -2952,6 +2991,7 @@ async function guardarTodoEnSupabase(){
     guardarClave('TC_COMPROBANTE_OVERRIDE',TC_COMPROBANTE_OVERRIDE),
     guardarPorCuenta('APERTURA_DETALLE',APERTURA_DETALLE),
     guardarPorCuenta('APERTURA_AUX2_DETALLE',APERTURA_AUX2_DETALLE),
+    guardarClave('MODULOS_MOV',MOD_MOV),
     guardarClave('APERTURA_ORDEN',APERTURA_ORDEN),
     guardarClave('APERTURA_ORDEN_AUX0N',APERTURA_ORDEN_AUX0N),
     guardarClave('APERTURA_PTO',APERTURA_PTO),
@@ -5132,6 +5172,349 @@ function parseOCPendFacturar(rows){
   }
   return agg;
 }
+/* ===== Módulos: vista por módulo + estadística y gráficos (a pedido de Micaela, 2026-11-07) =====
+   - Movimientos: filas "04 - CONTENEDOR/MODULO" del crudo de Tango (se toman solas al cargar el crudo) y del
+     Histórico 2022-08..2025-03 (se sube en esta solapa). Se guardan agregados por módulo x cuenta x mes en
+     MODULOS_MOV ([ars, usdOf, usdBill, axi]); al subir un archivo, sus meses reemplazan a los guardados.
+     Del Histórico se usan los USD que ya trae calculados cuando la app no tiene la cotización de esa fecha.
+   - Maestro: "Series Activas de Artículos" (tipología, dónde está hoy: depósito = cliente / Stock / Venta /
+     Uso interno ...) y "Precios por artículo" (lista, precio, grupo, región) -> MODULOS_MAESTRO.
+   - Pedidos: informe de pedidos de Tango; un pedido de alquiler (artículos VBA.. o VNQ..) por contenedor y mes:
+     la FECHA DE ENTREGA define el mes (definido por Micaela). Ocupación = módulos con pedido en el mes
+     (sin anulados) -> MODULOS_PEDIDOS.
+   - Cruce: por el número de contenedor normalizado (sin espacios ni guiones) contra Serie, Adicional 1 y
+     Código de barras de Series Activas, y Desc. adicional / Código de barras de Precios.
+   Se carga por mes cerrado, después del control de facturación. Subir informes requiere Editar en Control Módulos. */
+const MOD_MOV={meses:[],mods:{},ing:{}}; // mods[desc]={cod, ctas:{cuenta:{mes:[4]}}}; ing[cuenta]=true si es cuenta 4...
+let MOD_MAESTRO={series:{},precios:{},fSeries:"",fPrecios:""};
+let MOD_PEDIDOS={clientes:[],ped:{},fecha:""}; // ped[serieNorm][mes]=[[idxCliente,importe,nroPedido],...]
+const modNorm=s=>String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+const MOD_CAT=[
+  {k:"alq",lbl:"Alquileres",color:"#D6ECF7",ctas:["Venta Alquiler Modulos","Venta Alquiler Modulos Reefer.","Gastos Mantenimiento Modulos","Gastos Mantenimiento Reefers","Alquiler contenedores 3°"]},
+  {k:"dtm",lbl:"DTM & Mantenimiento",color:"#E8DAF2",ctas:["Venta Servicios de DTM & Mantenimiento","Gastos Servicios de DTM & Mantenimiento"]},
+  {k:"log",lbl:"Logística",color:"#D9EED4",ctas:["Venta Logistica Alquiler","Gastos de Transporte Alquiler","Gastos Logística Personal"]},
+  {k:"alta",lbl:"Alta / venta Bs de Uso",color:"#FFF1A8",ctas:["Bs de Uso Contenedor Basico","Bs de Uso Contenedor Modulo","Bs de Uso Contenedor Reefers","Venta de Bs. de Uso"]},
+  {k:"otros",lbl:"Otros (dif. de cambio, otros ingresos)",color:"#ECECEC",ctas:[]}
+];
+const MOD_CAT_DE={}; MOD_CAT.forEach(c=>c.ctas.forEach(x=>MOD_CAT_DE[normApertura(x)]=c.k));
+const modCatDe=cuenta=>MOD_CAT_DE[normApertura(cuenta)]||"otros";
+const MOD_CAT_ORDEN=Object.fromEntries(MOD_CAT.map((c,i)=>[c.k,i]));
+function modOrdenCta(cuenta){ const k=modCatDe(cuenta), c=MOD_CAT.find(x=>x.k===k); const i=c.ctas.findIndex(x=>normApertura(x)===normApertura(cuenta)); return MOD_CAT_ORDEN[k]*100+(i<0?99:i); }
+
+// ---------- lectura de informes ----------
+function modAgregarMov(rows){
+  const S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const hdr=(rows[0]||[]).map(S), iUo=hdr.indexOf("USD Ofic"), iUb=hdr.indexOf("USD Bill"), iAx=hdr.indexOf("AXI $$");
+  const mods={}, meses=new Set(), ing={}; let n=0;
+  for(let i=1;i<rows.length;i++){
+    const r=rows[i]; if(!r||r.length<13||!/^04/.test(S(r[1]))) continue;
+    const f=parseFechaCell(r[5]); if(!f) continue;
+    const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0"), dstr=y+"-"+String(f.getUTCDate()).padStart(2,"0");
+    const desc=S(r[3])||S(r[2]), cuenta=S(r[9]), ars=N(r[12]), comp=S(r[7]), origen=S(r[0]);
+    let of,bi;
+    const hayTabla=buscarCotizAtras(HIST_CAMBIARIO.ofic,dstr)!=null;
+    if(iUo>=0&&!hayTabla){ of=N(r[iUo]); bi=iUb>=0?N(r[iUb]):0; }
+    else { const tO=tcOficFor(dstr,origen,ars,N(r[15]),comp), tB=tcBillFor(dstr,origen,N(r[17]),comp); of=tO?ars/tO:0; bi=tB?ars/tB:0; }
+    const fA=axiFactorFor(y), axi=fA!=null?ars*fA:(iAx>=0?N(r[iAx]):0);
+    if(S(r[8]).startsWith("4")) ing[cuenta]=true;
+    const m=mods[desc]||(mods[desc]={cod:S(r[2]),ctas:{}}), c=m.ctas[cuenta]||(m.ctas[cuenta]={}), a=c[y]||(c[y]=[0,0,0,0]);
+    a[0]+=ars; a[1]+=of; a[2]+=bi; a[3]+=axi; meses.add(y); n++;
+  }
+  return {mods,meses:[...meses].sort(),ing,n};
+}
+function modMergeMov(res){
+  if(!res||!res.n) return 0;
+  const nuevos=new Set(res.meses);
+  Object.values(MOD_MOV.mods).forEach(m=>Object.values(m.ctas).forEach(s=>Object.keys(s).forEach(y=>{ if(nuevos.has(y)) delete s[y]; })));
+  Object.entries(res.mods).forEach(([d,m])=>{ const dst=MOD_MOV.mods[d]||(MOD_MOV.mods[d]={cod:m.cod,ctas:{}}); if(m.cod) dst.cod=m.cod;
+    Object.entries(m.ctas).forEach(([c,s])=>{ const t=dst.ctas[c]||(dst.ctas[c]={}); Object.entries(s).forEach(([y,v])=>t[y]=v.map(x=>Math.round(x*100)/100)); }); });
+  Object.assign(MOD_MOV.ing,res.ing);
+  MOD_MOV.meses=completarMeses([...new Set([...MOD_MOV.meses,...res.meses])]);
+  return res.n;
+}
+function modTipoArchivo(rows){
+  const h=(rows[0]||[]).map(x=>String(x==null?"":x).trim());
+  if(h.includes("Tipo de auxiliar")) return "mov";
+  if(h.includes("Serie")&&h.includes("Descripción depósito")) return "series";
+  if(h.includes("Lista de precios")&&h.includes("Desc. Adicional")) return "precios";
+  if(h.includes("FEC_ENTREG")&&h.includes("DESC_ADI")) return "pedidos";
+  return null;
+}
+function modLeerSeries(rows){
+  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim());
+  const out={};
+  rows.slice(1).forEach(r=>{ if(!r) return; const serie=S(r[ix("Serie")]); if(!serie) return;
+    out[modNorm(serie)]={serie,art:S(r[ix("Cód. Artículo")]),tipo:S(r[ix("Descripción")]),depCod:S(r[ix("Cód. Depósito")]),dep:S(r[ix("Descripción depósito")]),com:S(r[ix("Comentario")]),ub:S(r[ix("Adicional 2")]),alt:S(r[ix("Adicional 1")]),cb:S(r[ix("Código de Barras")])}; });
+  return out;
+}
+function modLeerPrecios(rows){
+  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const out={};
+  rows.slice(1).forEach(r=>{ if(!r) return; const id=S(r[ix("Desc. Adicional")]); if(!id) return;
+    out[modNorm(id)]={id,cb:S(r[ix("Código de Barras")]),art:S(r[ix("Cód. Artículo")]),tipo:S(r[ix("Descripción")]),grupo:S(r[ix("Grupo")]),region:S(r[ix("Familia")]),lista:S(r[ix("Lista de precios")]),precio:N(r[ix("Precio")]),moneda:S(r[ix("Moneda")])==="EXT"?"US$":"$"}; });
+  return out;
+}
+function modLeerPedidos(rows){
+  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const clientes=[], cIdx={}, ped={}; let n=0;
+  rows.slice(1).forEach(r=>{ if(!r) return;
+    if(/anulad/i.test(S(r[ix("ESTADO")]))) return;
+    if(!/^V(BA|NQ)/i.test(S(r[ix("COD_ARTIC")]))) return; // solo alquiler de un módulo puntual
+    const serie=S(r[ix("DESC_ADI")]), f=parseFechaCell(r[ix("FEC_ENTREG")]); if(!serie||!f) return;
+    const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0");
+    const cli=S(r[ix("RAZON_SOCI")]); if(!(cli in cIdx)){ cIdx[cli]=clientes.length; clientes.push(cli); }
+    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[cli],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,"")]); n++;
+  });
+  return {clientes,ped,n};
+}
+// ---------- ficha de cada módulo ----------
+let MOD_IDX=null;
+function modIndice(){
+  if(MOD_IDX) return MOD_IDX;
+  const s={}, p={};
+  Object.entries(MOD_MAESTRO.series||{}).forEach(([k,v])=>{ [v.serie,v.alt,v.cb].forEach(x=>{ const n=modNorm(x); if(n&&n!=="NA"&&!(n in s)) s[n]=k; }); });
+  Object.entries(MOD_MAESTRO.precios||{}).forEach(([k,v])=>{ [v.id,v.cb].forEach(x=>{ const n=modNorm(x); if(n&&!(n in p)) p[n]=k; }); });
+  return MOD_IDX={s,p};
+}
+function modFamilia(tipo,grupo){
+  const t=String(tipo||"").toUpperCase();
+  if(!t) return {tam:"Sin tipología",uso:"Sin tipología"};
+  let tam;
+  if(/REEFERS/.test(String(grupo||"").toUpperCase())||/REEFER$/.test(t)) tam="Reefer";
+  else if(/^MODULO/.test(t)) tam="Módulo";
+  else if(/\b20P\b/.test(t)) tam="Contenedor 20'";
+  else if(/\b40P\b/.test(t)) tam="Contenedor 40'";
+  else tam="Otros";
+  const usos=[["OFICINA","Oficina"],["VIVIENDA","Vivienda"],["BASICO","Básico"],["SANITARIO","Sanitario"],["COMEDOR","Comedor"],["VESTUARIO","Vestuario"],["PAÑOL","Pañol"],["LABORATORIO","Laboratorio"],["SHOWROOM","Showroom"],["COMPANY MAN","Company man"],["SALA","Sala"],["DEP","Depósito"],["TRAILER","Trailer"],["REEF","Reefer"]];
+  const u=usos.find(([k])=>t.includes(k));
+  return {tam,uso:u?u[1]:"Otro"};
+}
+function modEstado(dep){
+  const d=String(dep||"").toUpperCase();
+  if(!d) return "Sin dato";
+  if(/^STOCK/.test(d)) return "Stock";
+  if(d==="VENTA") return "Vendido";
+  if(/USO INTERNO/.test(d)) return "Uso interno";
+  if(/PERDIDO/.test(d)) return "Perdido";
+  if(/MANTENIMIENTO/.test(d)) return "Mantenimiento";
+  if(/BIENES DE USO/.test(d)) return "Bienes de uso";
+  return "Alquilado";
+}
+function modFicha(desc,cod){
+  const ix=modIndice(), n=modNorm(desc);
+  const sk=ix.s[n], s=sk?MOD_MAESTRO.series[sk]:null;
+  const pk=ix.p[n]||(s?(ix.p[modNorm(s.serie)]||ix.p[modNorm(s.alt)]||ix.p[modNorm(s.cb)]):null), p=pk?MOD_MAESTRO.precios[pk]:null;
+  const generico=!s&&!p&&(/^[AS]\d/.test(String(cod||""))||/GENERICO|NO APLICA|^STOCK |RE BUILDING/i.test(String(desc||"")));
+  const tipo=(s&&s.tipo)||(p&&p.tipo)||"";
+  const fam=generico?{tam:"Genéricos / terceros",uso:"Genéricos / terceros"}:modFamilia(tipo,p&&p.grupo);
+  const ub=(p&&p.region)||(s&&/NQN|NEUQ/i.test(s.ub)?"NEUQUEN":(s&&s.ub?"BUENOS AIRES":""));
+  const est=s?modEstado(s.dep):(generico?"—":"Sin dato");
+  const pedKey=s?modNorm(s.serie):n;
+  return {desc,cod,serie:s?s.serie:desc,tipo:tipo||(generico?"Genérico / tercero":"Sin tipología"),tam:fam.tam,uso:fam.uso,region:ub?(ub.toUpperCase().startsWith("NEU")?"Neuquén":"Buenos Aires"):"Sin dato",
+    estado:est,cliente:s&&est==="Alquilado"?s.dep:"",precio:p?p.precio:null,moneda:p?p.moneda:"",lista:p?p.lista:"",generico,pedKey,alt:[s&&s.alt,s&&s.cb,p&&p.cb].filter(x=>x&&x!=="N/A").join(" · ")};
+}
+function modPedidosDe(f){
+  const ix=modIndice(), keys=new Set([f.pedKey,modNorm(f.desc)]);
+  const out={};
+  keys.forEach(k=>{ const p=MOD_PEDIDOS.ped[k]; if(p) Object.entries(p).forEach(([y,l])=>{ (out[y]||(out[y]=[])).push(...l); }); });
+  return out;
+}
+// ---------- estado de filtros ----------
+const MOD_UI={sub:"det",cats:new Set(MOD_CAT.map(c=>c.k)),abiertos:new Set(),todoAbierto:false};
+function modMesesTodos(){
+  const pm=[]; Object.values(MOD_PEDIDOS.ped||{}).forEach(p=>pm.push(...Object.keys(p)));
+  const t=new Set([...(MOD_MOV.meses||[]),...pm.filter(y=>y>="2022-08")]);
+  return t.size?completarMeses([...t]):[];
+}
+function modFiltros(){
+  const g=id=>(document.getElementById(id)||{}).value||"";
+  const meses=modMesesTodos(), i0=+g("mdDesde")||0, i1=g("mdHasta")===""?meses.length-1:+g("mdHasta");
+  return {cur:+g("mdCur")||0,meses:meses.slice(Math.min(i0,i1),Math.max(i0,i1)+1),tam:g("mdTam"),uso:g("mdUso"),region:g("mdRegion"),estado:g("mdEstado"),q:modNorm(g("mdBuscar")),agrupar:g("mdAgrupar")||"tipo",soloPed:(document.getElementById("mdSoloPed")||{}).checked};
+}
+function modFilas(fl){
+  // Universo: módulos con movimiento en el período o con pedido de alquiler en el período
+  const set=new Set(fl.meses), filas=[], vistos=new Set();
+  const agregar=(desc,cod,m)=>{
+    const f=modFicha(desc,cod); if(vistos.has(f.pedKey+"|"+desc)) return; vistos.add(f.pedKey+"|"+desc);
+    const ctas=[];
+    Object.entries((m&&m.ctas)||{}).forEach(([c,s])=>{ const k=modCatDe(c); if(!MOD_UI.cats.has(k)) return;
+      const ingC=!!MOD_MOV.ing[c]; const vals=fl.meses.map(y=>{ const v=s[y]; return v?-(v[fl.cur]||0):0; }); // signo: ingreso +, gasto -
+      if(vals.some(v=>Math.abs(v)>0.5)) ctas.push({cuenta:c,cat:k,ing:ingC,vals,tot:vals.reduce((a,b)=>a+b,0)}); });
+    ctas.sort((a,b)=>modOrdenCta(a.cuenta)-modOrdenCta(b.cuenta));
+    const ped=modPedidosDe(f), pedVals=fl.meses.map(y=>ped[y]||null);
+    if(!ctas.length&&!pedVals.some(Boolean)) return;
+    if(fl.soloPed&&!pedVals.some(Boolean)) return;
+    if(fl.tam&&f.tam!==fl.tam) return; if(fl.uso&&f.uso!==fl.uso) return; if(fl.region&&f.region!==fl.region) return; if(fl.estado&&f.estado!==fl.estado) return;
+    if(fl.q&&!modNorm(desc+" "+cod+" "+f.tipo+" "+f.cliente+" "+f.alt).includes(fl.q)) return;
+    const neto=fl.meses.map((_,i)=>ctas.reduce((a,c)=>a+c.vals[i],0));
+    filas.push({f,ctas,ped:pedVals,neto,tot:neto.reduce((a,b)=>a+b,0),ingT:ctas.filter(c=>c.ing).reduce((a,c)=>a+c.tot,0),gasT:ctas.filter(c=>!c.ing).reduce((a,c)=>a+c.tot,0)});
+  };
+  Object.entries(MOD_MOV.mods).forEach(([d,m])=>agregar(d,m.cod,m));
+  // módulos con pedido pero sin movimiento contable en el período
+  Object.keys(MOD_PEDIDOS.ped||{}).forEach(k=>{ if(!fl.meses.some(y=>MOD_PEDIDOS.ped[k][y])) return; const s=MOD_MAESTRO.series[k]; const d=s?s.serie:k;
+    if(!MOD_MOV.mods[d]&&![...vistos].some(v=>v.startsWith(k+"|"))) agregar(d,"",null); });
+  const ord=f=>[f.tam,f.tipo,f.desc].join("|");
+  filas.sort((a,b)=>ord(a.f).localeCompare(ord(b.f),"es"));
+  return filas;
+}
+function modPoblarSelects(){
+  const meses=modMesesTodos(), d=document.getElementById("mdDesde"), h=document.getElementById("mdHasta"); if(!d) return;
+  const dv=d.value, hv=h.value, cambio=d.options.length!==meses.length;
+  if(cambio){ d.innerHTML=""; h.innerHTML=""; meses.forEach((m,i)=>{ d.add(new Option(mesLabel(m),i)); h.add(new Option(mesLabel(m),i)); });
+    d.value=String(Math.max(0,meses.length-12)); h.value=String(meses.length-1); }
+  else { d.value=dv; h.value=hv; }
+  const fichas=[...Object.entries(MOD_MOV.mods).map(([k,m])=>modFicha(k,m.cod)),...Object.keys(MOD_MAESTRO.series||{}).map(k=>modFicha(MOD_MAESTRO.series[k].serie,""))];
+  const opts=(id,campo,lbl)=>{ const el=document.getElementById(id), v=el.value; const vals=[...new Set(fichas.map(f=>f[campo]))].filter(Boolean).sort((a,b)=>a.localeCompare(b,"es"));
+    el.innerHTML=`<option value="">${lbl}</option>`+vals.map(x=>`<option${x===v?" selected":""}>${esc(x)}</option>`).join(""); };
+  opts("mdTam","tam","Todas"); opts("mdUso","uso","Todos"); opts("mdRegion","region","Todas"); opts("mdEstado","estado","Todos");
+  const cats=document.getElementById("mdCats");
+  if(cats&&!cats.dataset.ok){ cats.dataset.ok="1"; cats.innerHTML=MOD_CAT.map(c=>`<label style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;background:${c.color};font-size:12px;cursor:pointer"><input type="checkbox" class="md-cat" value="${c.k}" checked> ${esc(c.lbl)}</label>`).join(" ");
+    cats.querySelectorAll(".md-cat").forEach(ch=>ch.addEventListener("change",()=>{ ch.checked?MOD_UI.cats.add(ch.value):MOD_UI.cats.delete(ch.value); renderModulos(); })); }
+}
+function initModulos(){
+  const box=document.getElementById("mdBody"); if(!box) return;
+  modPoblarSelects();
+  if(!initModulos._wired){ initModulos._wired=true;
+    ["mdCur","mdDesde","mdHasta","mdTam","mdUso","mdRegion","mdEstado","mdAgrupar","mdSoloPed"].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener("change",renderModulos); });
+    document.getElementById("mdBuscar").addEventListener("input",()=>{ clearTimeout(initModulos._t); initModulos._t=setTimeout(renderModulos,250); });
+    document.getElementById("mdExpandir").addEventListener("click",()=>{ MOD_UI.todoAbierto=!MOD_UI.todoAbierto; MOD_UI.abiertos.clear(); renderModulos(); });
+    document.getElementById("mdXlsx").addEventListener("click",exportModulos);
+    document.getElementById("mdCargarBtn").addEventListener("click",()=>document.getElementById("mdCargarFile").click());
+    document.getElementById("mdCargarFile").addEventListener("change",onCargarInformesModulos);
+  }
+  const puede=puedeEditar("modulos"); ["mdCargarBtn"].forEach(id=>{ const b=document.getElementById(id); if(b){ b.style.display=puede?"":"none"; b.disabled=!puede; } });
+  modEstadoCarga();
+  renderModulos();
+}
+function modEstadoCarga(){
+  const el=document.getElementById("mdCargas"); if(!el) return;
+  const ns=Object.keys(MOD_MAESTRO.series||{}).length, np=Object.keys(MOD_MAESTRO.precios||{}).length, nped=Object.keys(MOD_PEDIDOS.ped||{}).length;
+  const mm=MOD_MOV.meses||[];
+  el.innerHTML=`Movimientos: ${mm.length?esc(mesLabel(mm[0]))+" a "+esc(mesLabel(mm[mm.length-1])):"<b>sin datos</b>"} · Series Activas: ${ns?ns+" unidades"+(MOD_MAESTRO.fSeries?" ("+esc(MOD_MAESTRO.fSeries)+")":""):"<b>falta</b>"} · Precios: ${np?np+(MOD_MAESTRO.fPrecios?" ("+esc(MOD_MAESTRO.fPrecios)+")":""):"<b>falta</b>"} · Pedidos: ${nped?nped+" contenedores"+(MOD_PEDIDOS.fecha?" ("+esc(MOD_PEDIDOS.fecha)+")":""):"<b>falta</b>"}`;
+}
+async function onCargarInformesModulos(ev){
+  const files=[...ev.target.files]; ev.target.value=""; if(!files.length) return;
+  const msg=document.getElementById("mdMsg"); msg.className="updmsg"; msg.textContent="Leyendo "+files.length+" archivo(s)...";
+  if(!puedeEditar("modulos")){ msg.className="updmsg err"; msg.textContent="Tu usuario no tiene permiso para cargar informes (Editar en Control Módulos)."; return; }
+  const partes=[], guardar=new Set(), hoy=new Date().toLocaleDateString("es-AR");
+  for(const file of files){
+    try{
+      const buf=await file.arrayBuffer(), wb=XLSX.read(buf,{type:"array",cellDates:true});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true});
+      const tipo=modTipoArchivo(rows);
+      if(tipo==="mov"){ const r=modAgregarMov(rows); const n=modMergeMov(r); guardar.add("MODULOS_MOV"); partes.push(`✓ ${file.name}: ${n} movimientos de ${Object.keys(r.mods).length} módulos (${r.meses.length?mesLabel(r.meses[0])+" a "+mesLabel(r.meses[r.meses.length-1]):"sin meses"})`); }
+      else if(tipo==="series"){ MOD_MAESTRO.series=modLeerSeries(rows); MOD_MAESTRO.fSeries=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.series).length} unidades (Series Activas)`); }
+      else if(tipo==="precios"){ MOD_MAESTRO.precios=modLeerPrecios(rows); MOD_MAESTRO.fPrecios=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.precios).length} precios`); }
+      else if(tipo==="pedidos"){ const r=modLeerPedidos(rows); MOD_PEDIDOS={clientes:r.clientes,ped:r.ped,fecha:hoy}; guardar.add("MODULOS_PEDIDOS"); partes.push(`✓ ${file.name}: ${r.n} pedidos de alquiler de ${Object.keys(r.ped).length} contenedores`); }
+      else partes.push(`✗ ${file.name}: no reconozco el informe (subí Series Activas, Precios por artículo, Pedidos, el crudo o el Histórico)`);
+    }catch(e){ partes.push(`✗ ${file.name}: ${e.message}`); console.error(e); }
+  }
+  MOD_IDX=null;
+  const val={MODULOS_MOV:MOD_MOV,MODULOS_MAESTRO:MOD_MAESTRO,MODULOS_PEDIDOS:MOD_PEDIDOS};
+  const res=await Promise.all([...guardar].map(k=>guardarClave(k,val[k])));
+  const fallas=res.filter(r=>r&&!r.ok);
+  msg.className=fallas.length||partes.some(p=>p.startsWith("✗"))?"updmsg err":"updmsg ok";
+  msg.textContent=partes.join(" · ")+(fallas.length?` ⚠ NO SE PUDO GUARDAR: ${fallas.map(f=>`${f.clave} (${f.kb} KB): ${f.error}`).join(" | ")}`:(guardar.size?" · Guardado en Supabase.":""));
+  modPoblarSelects(); modEstadoCarga(); renderModulos();
+}
+function modSimb(cur){ return ["$","US$","US$","$"][cur]; }
+function renderModulos(){
+  const box=document.getElementById("mdBody"); if(!box) return;
+  modPoblarSelects();
+  const fl=modFiltros();
+  document.getElementById("mdSubDet").style.display=MOD_UI.sub==="det"?"":"none";
+  document.getElementById("mdSubEst").style.display=MOD_UI.sub==="est"?"":"none";
+  document.querySelectorAll(".md-subbtn").forEach(b=>b.classList.toggle("active",b.dataset.s===MOD_UI.sub));
+  if(MOD_UI.sub==="est"){ renderModulosEst(fl); return; }
+  const filas=modFilas(fl);
+  if(!fl.meses.length){ box.innerHTML='<div class="note">Todavía no hay movimientos de módulos: cargá el crudo (Estado de Resultados) o subí el Histórico / informes con "Cargar informes de módulos".</div>'; document.getElementById("mdKpis").innerHTML=""; return; }
+  const f0=v=>Math.abs(v)<0.5?"–":fmt(v), cls=v=>v<-0.5?' style="color:#b5462a"':'';
+  const ingT=filas.reduce((a,x)=>a+x.ingT,0), gasT=filas.reduce((a,x)=>a+x.gasT,0);
+  const ocup=fl.meses.map((_,i)=>filas.filter(x=>x.ped[i]).length), ocProm=ocup.length?ocup.reduce((a,b)=>a+b,0)/ocup.length:0;
+  const s=modSimb(fl.cur);
+  document.getElementById("mdKpis").innerHTML=[["Ingresos",`${s} ${fmtM(ingT)}`],["Gastos",`${s} ${fmtM(Math.abs(gasT))}`],["Resultado",`${s} ${fmtM(ingT+gasT)}`],["Módulos",String(filas.length)],["Alquilados por mes (pedidos)",`${fmt(ocProm)} prom. · ${ocup[ocup.length-1]||0} en ${mesLabel(fl.meses[fl.meses.length-1])}`]]
+    .map(k=>`<div class="kpi"><div class="k-lbl">${k[0]}</div><div class="k-val">${k[1]}</div></div>`).join("");
+  const nM=fl.meses.length, head=`<thead><tr><th class="fz1" style="min-width:230px">Módulo / concepto</th><th style="text-align:left">Tipología</th><th style="text-align:left">Estado hoy</th>${fl.meses.map(m=>`<th>${mesLabel(m)}</th>`).join("")}<th>Total</th></tr></thead>`;
+  let rows=""; const grupo=x=>fl.agrupar==="tam"?x.f.tam:fl.agrupar==="tipo"?x.f.tam+" · "+x.f.tipo:"";
+  let gAct=null, gAcc=null;
+  const cerrarGrupo=()=>{ if(gAct!==null&&fl.agrupar!=="no") rows+=`<tr class="subtotal"><td class="fz1">Total ${esc(gAct)}</td><td></td><td></td>${gAcc.map(v=>`<td class="fzr"${cls(v)}>${f0(v)}</td>`).join("")}<td class="fzr"${cls(gAcc.reduce((a,b)=>a+b,0))}><b>${f0(gAcc.reduce((a,b)=>a+b,0))}</b></td></tr>`; };
+  filas.forEach(x=>{
+    const g=grupo(x);
+    if(fl.agrupar!=="no"&&g!==gAct){ cerrarGrupo(); gAct=g; gAcc=fl.meses.map(()=>0); rows+=`<tr class="section"><td colspan="${nM+4}"><span class="seclbl">${esc(g)}</span></td></tr>`; }
+    if(gAcc) x.neto.forEach((v,i)=>gAcc[i]+=v);
+    const abierto=MOD_UI.todoAbierto!==MOD_UI.abiertos.has(x.f.desc);
+    const precio=x.f.precio!=null?` · ${x.f.moneda} ${fmt(x.f.precio)}`:"";
+    rows+=`<tr class="md-mod" data-d="${esc(x.f.desc)}" style="cursor:pointer;background:#faf7ef"><td class="fz1"><span style="display:inline-block;width:14px;opacity:.6">${abierto?"▾":"▸"}</span><b>${esc(x.f.desc)}</b> <span class="note" style="font-size:10.5px">${esc(x.f.cod||"")}${precio}</span></td><td style="font-size:11.5px;text-align:left">${esc(x.f.tipo)}</td><td style="font-size:11.5px;text-align:left">${esc(x.f.estado)}${x.f.cliente?` · ${esc(x.f.cliente)}`:""}</td>${x.neto.map(v=>`<td class="fzr"${cls(v)}><b>${f0(v)}</b></td>`).join("")}<td class="fzr"${cls(x.tot)}><b>${f0(x.tot)}</b></td></tr>`;
+    if(abierto){
+      x.ctas.forEach(c=>{ const col=(MOD_CAT.find(k=>k.k===c.cat)||{}).color;
+        rows+=`<tr><td class="fz1" style="padding-left:24px;border-left:5px solid ${col}">${esc(c.cuenta)}</td><td colspan="2" style="font-size:11px;opacity:.7;text-align:left">${esc((MOD_CAT.find(k=>k.k===c.cat)||{}).lbl||"")}</td>${c.vals.map(v=>`<td class="fzr"${cls(v)}>${f0(v)}</td>`).join("")}<td class="fzr"${cls(c.tot)}>${f0(c.tot)}</td></tr>`; });
+      const clis=MOD_PEDIDOS.clientes||[];
+      rows+=`<tr><td class="fz1" style="padding-left:24px;border-left:5px solid #b9c7b0;font-size:11.5px;opacity:.85">Pedido de alquiler (ocupación)</td><td colspan="2"></td>${x.ped.map(p=>p?`<td style="text-align:center" title="${esc(p.map(z=>`${clis[z[0]]||""} · pedido ${z[2]} · ${fmt(z[1])}`).join("\n"))}">●${p.length>1?p.length:""}</td>`:`<td style="text-align:center;opacity:.35">–</td>`).join("")}<td class="fzr">${x.ped.filter(Boolean).length} m.</td></tr>`;
+    }
+  });
+  cerrarGrupo();
+  const tot=fl.meses.map((_,i)=>filas.reduce((a,x)=>a+x.neto[i],0));
+  rows+=`<tr class="result"><td class="fz1">TOTAL (${filas.length} módulos)</td><td></td><td></td>${tot.map(v=>`<td class="fzr">${f0(v)}</td>`).join("")}<td class="fzr">${f0(tot.reduce((a,b)=>a+b,0))}</td></tr>`;
+  rows+=`<tr><td class="fz1 mut">Módulos con pedido de alquiler</td><td></td><td></td>${ocup.map(v=>`<td class="fzr">${v||"–"}</td>`).join("")}<td></td></tr>`;
+  box.innerHTML=`<div class="table-wrap"><table id="mdTabla">${head}<tbody>${rows||`<tr><td colspan="${nM+4}" class="note">Nada para mostrar con estos filtros.</td></tr>`}</tbody></table></div>
+    <div class="foot">Importes en ${esc(MONEDA_NOMBRE[fl.cur])}: ingresos en positivo, gastos en negativo; la fila del módulo es el neto de las categorías elegidas. ● = pedido de alquiler con fecha de entrega en ese mes (pasá el mouse para ver cliente, pedido e importe). Tipología, estado y precio: Series Activas y Precios por artículo (los módulos que no cruzan dicen "Sin tipología").</div>`;
+  box.querySelectorAll(".md-mod").forEach(tr=>tr.addEventListener("click",()=>{ const d=tr.dataset.d; MOD_UI.abiertos.has(d)?MOD_UI.abiertos.delete(d):MOD_UI.abiertos.add(d); renderModulos(); }));
+}
+let MOD_CHARTS=[];
+function renderModulosEst(fl){
+  const box=document.getElementById("mdEstBody"); if(!box) return;
+  const filas=modFilas(Object.assign({},fl,{q:"",soloPed:false}));
+  const dim=document.getElementById("mdDim").value||"tam", clave=x=>dim==="tipo"?x.f.tipo:dim==="uso"?x.f.uso:x.f.tam;
+  const grupos=[...new Set(filas.map(clave))].sort((a,b)=>a.localeCompare(b,"es"));
+  const sumG=(fn)=>grupos.map(g=>fl.meses.map((_,i)=>filas.filter(x=>clave(x)===g).reduce((a,x)=>a+fn(x,i),0)));
+  const ingG=sumG((x,i)=>x.ctas.filter(c=>c.ing).reduce((a,c)=>a+c.vals[i],0));
+  const gasG=sumG((x,i)=>-x.ctas.filter(c=>!c.ing).reduce((a,c)=>a+c.vals[i],0));
+  const ocG=sumG((x,i)=>x.ped[i]?1:0);
+  // Ocupación (como la estadística de Micaela): por grupo, cuántos módulos con pedido por mes; unidades hoy = Series Activas sin vendidos/perdidos
+  const unidades=g=>Object.values(MOD_MAESTRO.series||{}).map(s=>modFicha(s.serie,"")).filter(f=>!["Vendido","Perdido"].includes(f.estado)&&(dim==="tipo"?f.tipo:dim==="uso"?f.uso:f.tam)===g&&(!fl.region||f.region===fl.region)).length;
+  const s=modSimb(fl.cur), f0=v=>Math.abs(v)<0.5?"–":fmt(v);
+  const ultimo=fl.meses.length-1;
+  let tb=grupos.map((g,gi)=>{ const u=unidades(g), oc=ocG[gi][ultimo]||0; return `<tr><td class="fz1">${esc(g)}</td><td class="fzr">${u||"–"}</td>${ocG[gi].map(v=>`<td class="fzr">${v||"–"}</td>`).join("")}<td class="fzr">${u?Math.round(oc/u*100)+"%":"–"}</td></tr>`; }).join("");
+  const totOc=fl.meses.map((_,i)=>ocG.reduce((a,r)=>a+r[i],0)), totU=grupos.reduce((a,g)=>a+unidades(g),0);
+  tb+=`<tr class="result"><td class="fz1">TOTAL</td><td class="fzr">${totU}</td>${totOc.map(v=>`<td class="fzr">${v||"–"}</td>`).join("")}<td class="fzr">${totU?Math.round((totOc[ultimo]||0)/totU*100)+"%":"–"}</td></tr>`;
+  const resT=grupos.map((g,gi)=>ingG[gi].reduce((a,b)=>a+b,0)-gasG[gi].reduce((a,b)=>a+b,0));
+  box.innerHTML=`<div class="cc-h" style="font-size:14px">Ocupación: módulos con pedido de alquiler por mes</div>
+    <div class="table-wrap"><table id="mdOcTabla"><thead><tr><th class="fz1">${dim==="tipo"?"Tipología":dim==="uso"?"Uso":"Tamaño / tipo"}</th><th>Unidades hoy</th>${fl.meses.map(m=>`<th>${mesLabel(m)}</th>`).join("")}<th>% ocupación ${esc(mesLabel(fl.meses[ultimo]||""))}</th></tr></thead><tbody>${tb}</tbody></table></div>
+    <div class="note" style="font-size:11px">Unidades hoy = Series Activas sin vendidos ni perdidos (es una foto de hoy: el % de meses anteriores no se puede calcular exacto).</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;margin-top:12px">
+      <div class="cmvctrl"><div class="cc-h">Ingresos por ${dim==="tipo"?"tipología":dim==="uso"?"uso":"tamaño / tipo"} (${s})</div><canvas id="mdCh1" height="220"></canvas></div>
+      <div class="cmvctrl"><div class="cc-h">Gastos por ${dim==="tipo"?"tipología":dim==="uso"?"uso":"tamaño / tipo"} (${s})</div><canvas id="mdCh2" height="220"></canvas></div>
+      <div class="cmvctrl"><div class="cc-h">Resultado del período (${s})</div><canvas id="mdCh3" height="220"></canvas></div>
+      <div class="cmvctrl"><div class="cc-h">Módulos alquilados por mes</div><canvas id="mdCh4" height="220"></canvas></div>
+    </div>
+    <div class="foot">Mismos filtros de arriba (categorías, región, período, moneda). Ingresos y gastos según las categorías elegidas.</div>`;
+  MOD_CHARTS.forEach(c=>{ try{c.destroy();}catch(_){ } }); MOD_CHARTS=[];
+  if(typeof Chart==="undefined") return;
+  const pal=["#3E5641","#C17C59","#5B7FA3","#B5963F","#8A6BA8","#5C9E8F","#B5563F","#7A7A7A","#9BC0A4","#D7A293","#A3B8D0","#C9B37A"];
+  const labels=fl.meses.map(mesLabel), ds=(arr)=>grupos.map((g,i)=>({label:g,data:arr[i].map(v=>Math.round(v)),backgroundColor:pal[i%pal.length],borderColor:pal[i%pal.length],stack:"s"}));
+  const fmtTick=v=>fmtM(v);
+  const opt=(stacked)=>({responsive:true,plugins:{legend:{position:"bottom",labels:{boxWidth:10,font:{size:10}}}},scales:{x:{stacked},y:{stacked,ticks:{callback:fmtTick}}}});
+  MOD_CHARTS.push(new Chart(document.getElementById("mdCh1"),{type:"bar",data:{labels,datasets:ds(ingG)},options:opt(true)}));
+  MOD_CHARTS.push(new Chart(document.getElementById("mdCh2"),{type:"bar",data:{labels,datasets:ds(gasG)},options:opt(true)}));
+  MOD_CHARTS.push(new Chart(document.getElementById("mdCh3"),{type:"bar",data:{labels:grupos,datasets:[{label:"Resultado",data:resT.map(Math.round),backgroundColor:resT.map(v=>v>=0?"#9BC0A4":"#D7A293")}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:fmtTick}}}}}));
+  MOD_CHARTS.push(new Chart(document.getElementById("mdCh4"),{type:"line",data:{labels,datasets:grupos.map((g,i)=>({label:g,data:ocG[i],borderColor:pal[i%pal.length],backgroundColor:pal[i%pal.length],tension:.2}))},options:{responsive:true,plugins:{legend:{position:"bottom",labels:{boxWidth:10,font:{size:10}}}}}}));
+}
+function exportModulos(){
+  const fl=modFiltros(), filas=modFilas(fl), E=XLSX_EST, c=(v,s)=>({v,s}), s=modSimb(fl.cur);
+  const hdr=["Módulo","Código Tango","Tipología","Tamaño / tipo","Uso","Región","Estado hoy","Cliente hoy","Precio lista","Categoría","Concepto",...fl.meses.map(mesLabel),"Total"];
+  const rows=[{cells:[c(`Módulos · ${MONEDA_NOMBRE[fl.cur]} · ${mesLabel(fl.meses[0])} a ${mesLabel(fl.meses[fl.meses.length-1])}`,E.title)],ht:22},{cells:[c(`Ingresos en positivo, gastos en negativo. Categorías: ${MOD_CAT.filter(k=>MOD_UI.cats.has(k.k)).map(k=>k.lbl).join(", ")}. "Pedido" = 1 si tuvo pedido de alquiler con entrega en el mes. Rojo = negativo.`,E.sub)]},{cells:hdr.map(h=>c(h,E.head)),ht:30}];
+  const clis=MOD_PEDIDOS.clientes||[];
+  filas.forEach(x=>{ const base=[c(x.f.desc,E.txt),c(x.f.cod||"",E.txt),c(x.f.tipo,E.txt),c(x.f.tam,E.txt),c(x.f.uso,E.txt),c(x.f.region,E.txt),c(x.f.estado,E.txt),c(x.f.cliente||"",E.txt),c(x.f.precio!=null?`${x.f.moneda} ${x.f.precio}`:"",E.txt)];
+    rows.push({cells:[...base,c("",E.txtTot),c("Neto del módulo",E.txtTot),...x.neto.map(v=>c(Math.round(v),E.numTot)),c(Math.round(x.tot),E.numTot)]});
+    x.ctas.forEach(k=>rows.push({cells:[...base,c((MOD_CAT.find(z=>z.k===k.cat)||{}).lbl||"",E.txtDet),c(k.cuenta,E.txtDet),...k.vals.map(v=>c(Math.round(v),E.numDet)),c(Math.round(k.tot),E.numDet)],level:1}));
+    rows.push({cells:[...base,c("Pedido de alquiler",E.txtDet),c("Pedido (1 = sí)",E.txtDet),...x.ped.map(p=>c(p?1:0,E.numDet)),c(x.ped.filter(Boolean).length,E.numDet)],level:1});
+  });
+  const nC=hdr.length;
+  xlsxDescargar([{name:"Módulos",cols:[18,11,30,16,12,13,13,24,13,20,32,...fl.meses.map(()=>13),15],rows,freeze:{r:3,c:1},filter:{r0:2,c0:0,r1:rows.length-1,c1:nC-1},merges:[`A1:${xlsxColL(Math.min(nC-1,14))}1`,`A2:${xlsxColL(Math.min(nC-1,14))}2`]}],s,`modulos_${fl.meses[0]}_${fl.meses[fl.meses.length-1]}.xlsx`);
+}
+function showModSub(s){ MOD_UI.sub=s; if(s==="old"){ document.getElementById("mdNuevo").style.display="none"; document.getElementById("mdViejo").style.display=""; document.querySelectorAll(".md-subbtn").forEach(b=>b.classList.toggle("active",b.dataset.s==="old")); renderControlModulos(); return; }
+  document.getElementById("mdNuevo").style.display=""; document.getElementById("mdViejo").style.display="none"; renderModulos(); }
+window.showModSub=showModSub;
 /* ===== Costeos (resultado real por proyecto) =====
    Replica el RESUMEN del modelo de costeo (PL0030_VDP_V04.xlsx) para el proyecto elegido, en 4 monedas:
    - Ingresos: facturado (filas 03 del proyecto con cuenta 4..., en positivo) + pendiente de facturar de
@@ -5697,6 +6080,7 @@ async function onCargarInformeCrudo(file){
     const resCuentas=parseRawLedgerCuentas(rows);
     const nCuentas=mergePtoRealIntoConfig(resCuentas);
     mergeAperturaIntoData(resCuentas);
+    try{ modMergeMov(modAgregarMov(rows)); MOD_IDX=null; }catch(e){ console.warn("modulos:",e); }
     const resC=parseRawLedgerCMV(rows);
     aplicarCMVDesdeCrudo(resC);
     msgEl.textContent="Guardando en Supabase...";
@@ -5865,7 +6249,11 @@ async function onCargarInformeCrudo(file){
   initPto();
   initPtoHist();
   initPtoApertura();
+  try{ const [mm,ma,mp]=await Promise.all([cargarClave("MODULOS_MOV"),cargarClave("MODULOS_MAESTRO"),cargarClave("MODULOS_PEDIDOS")]);
+    if(mm){ MOD_MOV.meses=completarMeses(mm.meses||[]); MOD_MOV.mods=mm.mods||{}; MOD_MOV.ing=mm.ing||{}; }
+    if(ma) MOD_MAESTRO=Object.assign({series:{},precios:{}},ma); if(mp) MOD_PEDIDOS=Object.assign({clientes:[],ped:{}},mp); MOD_IDX=null; }catch(e){ console.warn("modulos:",e); }
   initControlModulos();
+  try{ initModulos(); }catch(e){ console.warn("modulos:",e); }
   initCMV();
   try{ PROY_REVISION=(await cargarClave("PROY_REVISION"))||{}; }catch(e){ console.warn("revision:",e); }
   try{ const [cm,cc]=await Promise.all([cargarClave("COSTEOS_MANUAL"),cargarClave("COSTEOS_COMENT")]); COSTEOS_MANUAL=cm||{}; COSTEOS_COMENT=cc||{}; }catch(e){ console.warn("costeos:",e); }
