@@ -441,6 +441,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
         <label class="ctl" style="flex-direction:row;align-items:center;gap:6px">Agrupar <select id="mdAgrupar"><option value="tipo" selected>Por tipología</option><option value="tam">Por tamaño / tipo</option><option value="no">Sin agrupar</option></select></label>
         <label style="font-size:12.5px;display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="mdSoloPed"> Solo con pedido de alquiler en el período</label>
         <button class="btn" id="mdExpandir">Expandir / contraer todo</button>
+        <button class="btn" onclick="autoFitTable('mdTabla')">Ajustar columnas</button>
         <button class="btn" id="mdXlsx">Descargar Excel</button>
         <span class="note" style="font-size:11px">Clic en un módulo para ver el detalle por concepto y los pedidos.</span>
       </div>
@@ -5269,16 +5270,16 @@ function modLeerPrecios(rows){
 }
 function modLeerPedidos(rows){
   const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
-  const clientes=[], cIdx={}, ped={}; let n=0;
+  const clientes=[], codigos=[], cIdx={}, ped={}; let n=0;
   rows.slice(1).forEach(r=>{ if(!r) return;
-    if(/anulad/i.test(S(r[ix("ESTADO")]))) return;
+    if(/anulad|cerrad/i.test(S(r[ix("ESTADO")]))) return; // a pedido de Micaela: no cuentan los anulados ni los cerrados
     if(!/^V(BA|NQ)/i.test(S(r[ix("COD_ARTIC")]))) return; // solo alquiler de un módulo puntual
     const serie=S(r[ix("DESC_ADI")]), f=parseFechaCell(r[ix("FEC_ENTREG")]); if(!serie||!f) return;
     const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0");
-    const cli=S(r[ix("RAZON_SOCI")]); if(!(cli in cIdx)){ cIdx[cli]=clientes.length; clientes.push(cli); }
-    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[cli],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")])]); n++;
+    const cod=S(r[ix("COD_CLIENT")]), cli=S(r[ix("RAZON_SOCI")]), kc=cod||cli; if(!(kc in cIdx)){ cIdx[kc]=clientes.length; clientes.push(cli); codigos.push(cod||cli); }
+    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[kc],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")])]); n++;
   });
-  return {clientes,ped,n};
+  return {clientes,codigos,ped,n};
 }
 // ---------- ficha de cada módulo ----------
 let MOD_IDX=null;
@@ -5326,6 +5327,12 @@ function modFicha(desc,cod){
   return {desc,cod,serie:s?s.serie:desc,tipo:tipo||(generico?"Genérico / tercero":"Sin tipología"),tam:fam.tam,uso:fam.uso,region:ub?(ub.toUpperCase().startsWith("NEU")?"Neuquén":"Buenos Aires"):"Sin dato",
     estado:est,cliente:s&&est==="Alquilado"?s.dep:"",precio:p?p.precio:null,moneda:p?p.moneda:"",lista:p?p.lista:"",generico,pedKey,alt:[s&&s.alt,s&&s.cb,p&&p.cb].filter(x=>x&&x!=="N/A").join(" · ")};
 }
+const modCodCli=i=>((MOD_PEDIDOS.codigos||[])[i])||((MOD_PEDIDOS.clientes||[])[i])||"";
+function modClienteHoy(f){
+  // código de cliente del último pedido de alquiler del módulo (más corto que la razón social); si no hay, el depósito
+  const ped=modPedidosDe(f), ys=Object.keys(ped).sort(); if(ys.length){ const z=ped[ys[ys.length-1]][0]; return {cod:modCodCli(z[0]),nom:(MOD_PEDIDOS.clientes||[])[z[0]]||""}; }
+  return {cod:f.cliente,nom:f.cliente};
+}
 function modPedidosDe(f){
   const ix=modIndice(), keys=new Set([f.pedKey,modNorm(f.desc)]);
   const out={};
@@ -5360,7 +5367,7 @@ function modFilas(fl){
     if(fl.tam&&f.tam!==fl.tam) return; if(fl.uso&&f.uso!==fl.uso) return; if(fl.region&&f.region!==fl.region) return; if(fl.estado&&f.estado!==fl.estado) return;
     if(fl.q&&!modNorm(desc+" "+cod+" "+f.tipo+" "+f.cliente+" "+f.alt).includes(fl.q)) return;
     const neto=fl.meses.map((_,i)=>ctas.reduce((a,c)=>a+c.vals[i],0));
-    filas.push({f,ctas,ped:pedVals,neto,tot:neto.reduce((a,b)=>a+b,0),ingT:ctas.filter(c=>c.ing).reduce((a,c)=>a+c.tot,0),gasT:ctas.filter(c=>!c.ing).reduce((a,c)=>a+c.tot,0)});
+    filas.push({f,cli:modClienteHoy(f),ctas,ped:pedVals,neto,tot:neto.reduce((a,b)=>a+b,0),ingT:ctas.filter(c=>c.ing).reduce((a,c)=>a+c.tot,0),gasT:ctas.filter(c=>!c.ing).reduce((a,c)=>a+c.tot,0)});
   };
   Object.entries(MOD_MOV.mods).forEach(([d,m])=>agregar(d,m.cod,m));
   // módulos con pedido pero sin movimiento contable en el período
@@ -5420,7 +5427,7 @@ async function onCargarInformesModulos(ev){
       if(tipo==="mov"){ const r=modAgregarMov(rows); const n=modMergeMov(r); guardar.add("MODULOS_MOV"); partes.push(`✓ ${file.name}: ${n} movimientos de ${Object.keys(r.mods).length} módulos (${r.meses.length?mesLabel(r.meses[0])+" a "+mesLabel(r.meses[r.meses.length-1]):"sin meses"})`); }
       else if(tipo==="series"){ MOD_MAESTRO.series=modLeerSeries(rows); MOD_MAESTRO.fSeries=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.series).length} unidades (Series Activas)`); }
       else if(tipo==="precios"){ MOD_MAESTRO.precios=modLeerPrecios(rows); MOD_MAESTRO.fPrecios=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.precios).length} precios`); }
-      else if(tipo==="pedidos"){ const r=modLeerPedidos(rows); MOD_PEDIDOS={clientes:r.clientes,ped:r.ped,fecha:hoy}; guardar.add("MODULOS_PEDIDOS"); partes.push(`✓ ${file.name}: ${r.n} pedidos de alquiler de ${Object.keys(r.ped).length} contenedores`); }
+      else if(tipo==="pedidos"){ const r=modLeerPedidos(rows); MOD_PEDIDOS={clientes:r.clientes,codigos:r.codigos,ped:r.ped,fecha:hoy}; guardar.add("MODULOS_PEDIDOS"); partes.push(`✓ ${file.name}: ${r.n} pedidos de alquiler de ${Object.keys(r.ped).length} contenedores`); }
       else if(tipo==="fact"){ const r=modLeerFact(rows); MOD_FACT={fact:r.fact,clientes:r.clientes,fecha:hoy}; guardar.add("MODULOS_FACT"); partes.push(`✓ ${file.name}: ${r.n} renglones de facturación de alquiler (${Object.keys(r.fact).length} contenedores)`); }
       else if(tipo==="movser"){ MOD_MOVSER={rows:modLeerMovSeries(rows),fecha:hoy}; guardar.add("MODULOS_MOVSER"); partes.push(`✓ ${file.name}: ${MOD_MOVSER.rows.length} movimientos de series`); }
       else partes.push(`✗ ${file.name}: no reconozco el informe (subí Series Activas, Precios por artículo, Pedidos, Res x Art Mensual, Movimientos de series, Modelos de pedidos, el crudo o el Histórico)`);
@@ -5454,31 +5461,36 @@ function renderModulos(){
   const s=modSimb(fl.cur);
   document.getElementById("mdKpis").innerHTML=[["Ingresos",`${s} ${fmtM(ingT)}`],["Gastos",`${s} ${fmtM(Math.abs(gasT))}`],["Resultado",`${s} ${fmtM(ingT+gasT)}`],["Módulos",String(filas.length)],["Alquilados por mes (pedidos)",`${fmt(ocProm)} prom. · ${ocup[ocup.length-1]||0} en ${mesLabel(fl.meses[fl.meses.length-1])}`]]
     .map(k=>`<div class="kpi"><div class="k-lbl">${k[0]}</div><div class="k-val">${k[1]}</div></div>`).join("");
-  const nM=fl.meses.length, head=`<thead><tr><th class="fz1" style="min-width:230px">Módulo / concepto</th><th style="text-align:left">Tipología</th><th style="text-align:left">Estado hoy</th>${fl.meses.map(m=>`<th>${mesLabel(m)}</th>`).join("")}<th>Total</th></tr></thead>`;
+  const nM=fl.meses.length, head=`<thead><tr><th class="fz fz1" style="min-width:230px">Módulo / concepto</th><th style="text-align:left">Tipología</th><th style="text-align:left">Estado hoy</th>${fl.meses.map(m=>`<th>${mesLabel(m)}</th>`).join("")}<th>Total</th></tr></thead>`;
   let rows=""; const grupo=x=>fl.agrupar==="tam"?x.f.tam:fl.agrupar==="tipo"?x.f.tam+" · "+x.f.tipo:"";
   let gAct=null, gAcc=null;
-  const cerrarGrupo=()=>{ if(gAct!==null&&fl.agrupar!=="no") rows+=`<tr class="subtotal"><td class="fz1">Total ${esc(gAct)}</td><td></td><td></td>${gAcc.map(v=>`<td class="fzr"${cls(v)}>${f0(v)}</td>`).join("")}<td class="fzr"${cls(gAcc.reduce((a,b)=>a+b,0))}><b>${f0(gAcc.reduce((a,b)=>a+b,0))}</b></td></tr>`; };
+  const cerrarGrupo=()=>{ if(gAct!==null&&fl.agrupar!=="no") rows+=`<tr class="subtotal"><td class="fz fz1">Total ${esc(gAct)}</td><td></td><td></td>${gAcc.map(v=>`<td class="fzr"${cls(v)}>${f0(v)}</td>`).join("")}<td class="fzr"${cls(gAcc.reduce((a,b)=>a+b,0))}><b>${f0(gAcc.reduce((a,b)=>a+b,0))}</b></td></tr>`; };
   filas.forEach(x=>{
     const g=grupo(x);
     if(fl.agrupar!=="no"&&g!==gAct){ cerrarGrupo(); gAct=g; gAcc=fl.meses.map(()=>0); rows+=`<tr class="section"><td colspan="${nM+4}"><span class="seclbl">${esc(g)}</span></td></tr>`; }
     if(gAcc) x.neto.forEach((v,i)=>gAcc[i]+=v);
     const abierto=MOD_UI.todoAbierto!==MOD_UI.abiertos.has(x.f.desc);
     const precio=x.f.precio!=null?` · ${x.f.moneda} ${fmt(x.f.precio)}`:"";
-    rows+=`<tr class="md-mod" data-d="${esc(x.f.desc)}" style="cursor:pointer;background:#faf7ef"><td class="fz1"><span style="display:inline-block;width:14px;opacity:.6">${abierto?"▾":"▸"}</span><b>${esc(x.f.desc)}</b> <span class="note" style="font-size:10.5px">${esc(x.f.cod||"")}${precio}</span></td><td style="font-size:11.5px;text-align:left">${esc(x.f.tipo)}</td><td style="font-size:11.5px;text-align:left">${esc(x.f.estado)}${x.f.cliente?` · ${esc(x.f.cliente)}`:""}</td>${x.neto.map(v=>`<td class="fzr"${cls(v)}><b>${f0(v)}</b></td>`).join("")}<td class="fzr"${cls(x.tot)}><b>${f0(x.tot)}</b></td></tr>`;
+    rows+=`<tr class="md-mod" data-d="${esc(x.f.desc)}" style="cursor:pointer;background:#faf7ef"><td class="fz fz1"><span style="display:inline-block;width:14px;opacity:.6">${abierto?"▾":"▸"}</span><b>${esc(x.f.desc)}</b> <span class="note" style="font-size:10.5px">${esc(x.f.cod||"")}${precio}</span></td><td style="font-size:11.5px;text-align:left">${esc(x.f.tipo)}</td><td style="font-size:11.5px;text-align:left"${x.f.cliente?` title="${esc(x.cli.nom||x.f.cliente)}"`:""}>${esc(x.f.estado)}${x.f.cliente?` · ${esc(x.cli.cod||x.f.cliente)}`:""}</td>${x.neto.map(v=>`<td class="fzr"${cls(v)}><b>${f0(v)}</b></td>`).join("")}<td class="fzr"${cls(x.tot)}><b>${f0(x.tot)}</b></td></tr>`;
     if(abierto){
       x.ctas.forEach(c=>{ const col=(MOD_CAT.find(k=>k.k===c.cat)||{}).color;
-        rows+=`<tr><td class="fz1" style="padding-left:24px;border-left:5px solid ${col}">${esc(c.cuenta)}</td><td colspan="2" style="font-size:11px;opacity:.7;text-align:left">${esc((MOD_CAT.find(k=>k.k===c.cat)||{}).lbl||"")}</td>${c.vals.map(v=>`<td class="fzr"${cls(v)}>${f0(v)}</td>`).join("")}<td class="fzr"${cls(c.tot)}>${f0(c.tot)}</td></tr>`; });
+        rows+=`<tr><td class="fz fz1" style="padding-left:24px;border-left:5px solid ${col}">${esc(c.cuenta)}</td><td colspan="2" style="font-size:11px;opacity:.7;text-align:left">${esc((MOD_CAT.find(k=>k.k===c.cat)||{}).lbl||"")}</td>${c.vals.map(v=>`<td class="fzr"${cls(v)}>${f0(v)}</td>`).join("")}<td class="fzr"${cls(c.tot)}>${f0(c.tot)}</td></tr>`; });
       const clis=MOD_PEDIDOS.clientes||[];
-      rows+=`<tr><td class="fz1" style="padding-left:24px;border-left:5px solid #b9c7b0;font-size:11.5px;opacity:.85">Pedido de alquiler (ocupación)</td><td colspan="2"></td>${x.ped.map(p=>p?`<td style="text-align:center" title="${esc(p.map(z=>`${clis[z[0]]||""} · pedido ${z[2]} · ${fmt(z[1])}`).join("\n"))}">●${p.length>1?p.length:""}</td>`:`<td style="text-align:center;opacity:.35">–</td>`).join("")}<td class="fzr">${x.ped.filter(Boolean).length} m.</td></tr>`;
+      rows+=`<tr><td class="fz fz1" style="padding-left:24px;border-left:5px solid #b9c7b0;font-size:11.5px;opacity:.85">Pedido de alquiler (ocupación)</td><td colspan="2"></td>${x.ped.map(p=>p?`<td style="text-align:center;${p.length>1?"color:#b5462a;font-weight:700":""}" title="${esc(p.map(z=>`${modCodCli(z[0])} ${clis[z[0]]||""} · pedido ${z[2]}${z[4]?" ("+z[4]+")":""} · ${fmt(z[1])}`).join("\n"))}">${p.length}</td>`:`<td style="text-align:center;opacity:.35">–</td>`).join("")}<td class="fzr">${x.ped.filter(Boolean).length} m.</td></tr>`;
     }
   });
   cerrarGrupo();
   const tot=fl.meses.map((_,i)=>filas.reduce((a,x)=>a+x.neto[i],0));
-  rows+=`<tr class="result"><td class="fz1">TOTAL (${filas.length} módulos)</td><td></td><td></td>${tot.map(v=>`<td class="fzr">${f0(v)}</td>`).join("")}<td class="fzr">${f0(tot.reduce((a,b)=>a+b,0))}</td></tr>`;
-  rows+=`<tr><td class="fz1 mut">Módulos con pedido de alquiler</td><td></td><td></td>${ocup.map(v=>`<td class="fzr">${v||"–"}</td>`).join("")}<td></td></tr>`;
-  box.innerHTML=`<div class="table-wrap"><table id="mdTabla">${head}<tbody>${rows||`<tr><td colspan="${nM+4}" class="note">Nada para mostrar con estos filtros.</td></tr>`}</tbody></table></div>
-    <div class="foot">Importes en ${esc(MONEDA_NOMBRE[fl.cur])}: ingresos en positivo, gastos en negativo; la fila del módulo es el neto de las categorías elegidas. ● = pedido de alquiler con fecha de entrega en ese mes (pasá el mouse para ver cliente, pedido e importe). Tipología, estado y precio: Series Activas y Precios por artículo (los módulos que no cruzan dicen "Sin tipología").</div>`;
-  box.querySelectorAll(".md-mod").forEach(tr=>tr.addEventListener("click",()=>{ const d=tr.dataset.d; MOD_UI.abiertos.has(d)?MOD_UI.abiertos.delete(d):MOD_UI.abiertos.add(d); renderModulos(); }));
+  rows+=`<tr class="result"><td class="fz fz1">TOTAL (${filas.length} módulos)</td><td></td><td></td>${tot.map(v=>`<td class="fzr">${f0(v)}</td>`).join("")}<td class="fzr">${f0(tot.reduce((a,b)=>a+b,0))}</td></tr>`;
+  rows+=`<tr><td class="fz fz1 mut">Módulos con pedido de alquiler</td><td></td><td></td>${ocup.map(v=>`<td class="fzr">${v||"–"}</td>`).join("")}<td></td></tr>`;
+  box.innerHTML=`<div class="table-wrap pto-wrap"><table id="mdTabla" class="grid">${head}<tbody>${rows||`<tr><td colspan="${nM+4}" class="note">Nada para mostrar con estos filtros.</td></tr>`}</tbody></table></div>
+    <div class="foot">Importes en ${esc(MONEDA_NOMBRE[fl.cur])}: ingresos en positivo, gastos en negativo; la fila del módulo es el neto de las categorías elegidas. Fila "Pedido de alquiler": cantidad de pedidos con fecha de entrega en ese mes, sin anulados ni cerrados (1 = alquilado; 2 o más en rojo, revisar). Pasá el mouse para ver cliente, pedido e importe. Tipología, estado y precio: Series Activas y Precios por artículo (los módulos que no cruzan dicen "Sin tipología").</div>`;
+  { const t=document.getElementById("mdTabla");
+    // en las tablas "grid" la clase fzr fija la columna a la derecha: acá los importes solo van alineados a la derecha
+    t.querySelectorAll("td.fzr").forEach(td=>{ td.classList.remove("fzr"); td.style.textAlign="right"; td.style.whiteSpace="nowrap"; });
+    t.querySelectorAll("thead th:not(.fz)").forEach(th=>{ if(!/Tipolog|Estado/.test(th.textContent)) th.style.textAlign="right"; });
+    colResizeInit(t); requestAnimationFrame(()=>actualizarStickyPto("mdTabla")); }
+  box.querySelectorAll(".md-mod").forEach(tr=>tr.addEventListener("click",ev=>{ if(ev.target.closest(".col-resizer")) return; const d=tr.dataset.d; MOD_UI.abiertos.has(d)?MOD_UI.abiertos.delete(d):MOD_UI.abiertos.add(d); renderModulos(); }));
 }
 let MOD_CHARTS=[];
 function renderModulosEst(fl){
@@ -5618,7 +5630,7 @@ function modCtrlCalcular(mes){
     if(ped.length&&facNeta&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
     const explic=dif.length?(com[k]?"Comentario":(mv.length?(mv.some(r=>r[0].slice(0,7)===mes)?"Movimiento de series en el mes":"Movimiento de series posterior al cierre"):"")):"";
     const estado=!dif.length?"OK":(explic?"Explicado":"SIN EXPLICAR");
-    return {k,serie:s?s.serie:(ped[0]||fac[0])?k:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",cliPed:[...new Set(ped.map(z=>clis[z[0]]||""))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
+    return {k,serie:s?s.serie:(ped[0]||fac[0])?k:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",cliPed:[...new Set(ped.map(z=>modCodCli(z[0])))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
       ped,impP,cub,fac,impF,mv,md,dif,avisos,explic,estado,com:com[k]||""};
   });
   // nombre legible para lo que no está en Series Activas: el del pedido/factura no lo trae; se deja el normalizado
