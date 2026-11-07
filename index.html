@@ -2864,18 +2864,39 @@ async function authToken(){
 // "Guardado en Supabase" igual (2026-11-07: Control Modulos volvia a 0 al refrescar sin que se viera
 // por que). Los que no miran el resultado siguen funcionando igual.
 let GUARDADO_FALLAS=[];
+/* 2026-11-07: Supabase cortaba los guardados por tiempo ("canceling statement due to statement timeout",
+   código 57014) al cargar el crudo: se mandaban ~75 claves a la vez y cada escritura en eerr_estado además copia
+   el valor viejo y el nuevo completos a core_auditoria (auditoría del portal, SQL 082). Ahora:
+   - se guardan de a GUARDADO_MAX a la vez (cola), con hasta 3 reintentos si Supabase responde 5xx;
+   - no se reescribe una clave que no cambió desde que se leyó o guardó (huella del JSON). */
+const GUARDADO_MAX=2, GUARDADO_HASH={};
+let guardadoActivos=0; const guardadoCola=[];
+const guardadoTurno=()=>new Promise(r=>{ if(guardadoActivos<GUARDADO_MAX){ guardadoActivos++; r(); } else guardadoCola.push(r); });
+const guardadoLibera=()=>{ const n=guardadoCola.shift(); if(n) n(); else guardadoActivos--; };
+function huellaJson(str){ let h=0x811c9dc5; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,0x01000193); } return (h>>>0).toString(36)+":"+str.length; }
 async function guardarClave(clave,valor){
   if(!sbClient) return {ok:false,clave,error:"sin conexión"};
-  const token=await authToken();
-  let kb=0; try{ kb=Math.round(JSON.stringify(valor).length/1024); }catch(_){}
+  let json="", kb=0; try{ json=JSON.stringify(valor); kb=Math.round(json.length/1024); }catch(_){}
+  const huella=json?huellaJson(json):null;
+  if(huella&&GUARDADO_HASH[clave]===huella) return {ok:true,clave,kb,sinCambios:true};
+  await guardadoTurno();
   try{
-    const res=await fetch(SB_REST+'/eerr_estado',{method:'POST',headers:{'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({clave,valor,actualizado_en:new Date().toISOString()})});
-    if(!res.ok) throw new Error('Supabase '+res.status+': '+(await res.text()).slice(0,200));
-    return {ok:true,clave,kb};
+    let ultimoError=null;
+    for(let intento=0;intento<4;intento++){
+      if(intento) await new Promise(r=>setTimeout(r,1500*intento));
+      try{
+        const token=await authToken();
+        const res=await fetch(SB_REST+'/eerr_estado',{method:'POST',headers:{'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:'{"clave":'+JSON.stringify(clave)+',"valor":'+(json||"null")+',"actualizado_en":"'+new Date().toISOString()+'"}'});
+        if(res.ok){ if(huella) GUARDADO_HASH[clave]=huella; return {ok:true,clave,kb}; }
+        ultimoError=new Error('Supabase '+res.status+': '+(await res.text()).slice(0,200));
+        if(res.status<500) break; // 4xx (permiso, formato): reintentar no sirve
+      }catch(e){ ultimoError=e; }
+    }
+    throw ultimoError;
   }catch(e){
     console.warn('No se pudo guardar "'+clave+'" en Supabase ('+kb+' KB):',e);
     const f={ok:false,clave,kb,error:String(e&&e.message||e)}; GUARDADO_FALLAS.push(f); return f;
-  }
+  }finally{ guardadoLibera(); }
 }
 /* 2026-11-07: APERTURA_DETALLE (~2,5 MB con el crudo abr-25..nov-26, desde que se sumaron las 4 cuentas de
    Control Modulos) y APERTURA_AUX2_DETALLE (~1 MB) se guardan UNA FILA POR CUENTA ("APERTURA_DETALLE::Alquiler
@@ -2883,6 +2904,11 @@ async function guardarClave(clave,valor){
    Al leer: primero la clave vieja de un solo valor (si existe) y encima, cuenta por cuenta, las nuevas. La
    "__indice__" lista las cuentas vigentes. */
 const SEP_CLAVE="::";
+// PROY_CTRL (~1,7 MB) también va una fila por proyecto ("PROY_CTRL::PL0030") + la lista de meses.
+async function guardarProyCtrl(){
+  const [a,b]=await Promise.all([guardarClave('PROY_CTRL_MESES',PROY_CTRL.meses),guardarPorCuenta('PROY_CTRL',PROY_CTRL.proyectos)]);
+  return a&&!a.ok?a:b;
+}
 async function guardarPorCuenta(base,obj){
   const cuentas=Object.keys(obj);
   const res=await Promise.all(cuentas.map(c=>guardarClave(base+SEP_CLAVE+c,obj[c])));
@@ -2899,7 +2925,7 @@ async function cargarPorCuenta(base){
     if(!res.ok) throw new Error('Supabase '+res.status);
     const rows=await res.json(); if(!rows||!rows.length) return null;
     const pre=base+SEP_CLAVE, out={}; let indice=null;
-    rows.forEach(r=>{ const c=String(r.clave).slice(pre.length); if(c==="__indice__") indice=r.valor; else out[c]=r.valor; });
+    rows.forEach(r=>{ const c=String(r.clave).slice(pre.length); try{ GUARDADO_HASH[r.clave]=huellaJson(JSON.stringify(r.valor)); }catch(_){} if(c==="__indice__") indice=r.valor; else out[c]=r.valor; });
     if(Array.isArray(indice)) Object.keys(out).forEach(c=>{ if(!indice.includes(c)) delete out[c]; });
     return out;
   }catch(e){ console.warn('No se pudo leer "'+base+'" por cuenta de Supabase:',e); return null; }
@@ -2911,7 +2937,9 @@ async function cargarClave(clave){
     const res=await fetch(SB_REST+'/eerr_estado?select=valor&clave=eq.'+encodeURIComponent(clave),{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+token}});
     if(!res.ok) throw new Error('Supabase '+res.status);
     const rows=await res.json();
-    return rows&&rows.length?rows[0].valor:null;
+    const v=rows&&rows.length?rows[0].valor:null;
+    if(v!=null){ try{ GUARDADO_HASH[clave]=huellaJson(JSON.stringify(v)); }catch(_){} }
+    return v;
   }catch(e){ console.warn('No se pudo leer "'+clave+'" de Supabase:',e); return null; }
 }
 // Bloqueo de historico: meses <= HIST_LOCK.hasta ("AAAA-MM") no se tocan mas en ninguna carga de
@@ -2994,9 +3022,9 @@ async function guardarTodoEnSupabase(){
     guardarClave('PROJ_DATA',PROJ_DATA),
     guardarClave('OVERRIDES',OVERRIDES),
     guardarClave('PROJ_OV',PROJ_OV),
-    guardarClave('PROY_CTRL',PROY_CTRL),
-    guardarClave('PROY_CTRL_OC',PROY_CTRL_OC),
-    guardarClave('PROY_CTRL_PF',PROY_CTRL_PF),
+    guardarProyCtrl(),
+    guardarPorCuenta('PROY_CTRL_OC',PROY_CTRL_OC),
+    guardarPorCuenta('PROY_CTRL_PF',PROY_CTRL_PF),
     guardarClave('PROY_CTRL_MANUAL',PROY_CTRL_MANUAL),
     guardarClave('CMV_AVISOS',CMV_AVISOS),
     guardarClave('HIST_LOCK',HIST_LOCK),
@@ -3058,6 +3086,10 @@ async function cargarTodoDesdeSupabase(){
   if(apo){ Object.assign(APERTURA_ORDEN,apo); hubo=true; }
   if(appto){ Object.assign(APERTURA_PTO,appto); hubo=true; }
   if(apd2){ Object.assign(APERTURA_AUX2_DETALLE,apd2); hubo=true; }
+  { const [pp,pm,po,pf]=await Promise.all([cargarPorCuenta('PROY_CTRL'),cargarClave('PROY_CTRL_MESES'),cargarPorCuenta('PROY_CTRL_OC'),cargarPorCuenta('PROY_CTRL_PF')]);
+    if(pp){ PROY_CTRL.proyectos=pp; if(Array.isArray(pm)) PROY_CTRL.meses=completarMeses(pm); hubo=true; }
+    if(po){ Object.keys(PROY_CTRL_OC).forEach(k=>delete PROY_CTRL_OC[k]); Object.assign(PROY_CTRL_OC,po); hubo=true; }
+    if(pf){ Object.keys(PROY_CTRL_PF).forEach(k=>delete PROY_CTRL_PF[k]); Object.assign(PROY_CTRL_PF,pf); hubo=true; } }
   { const [pc1,pc2]=await Promise.all([cargarPorCuenta('APERTURA_DETALLE'),cargarPorCuenta('APERTURA_AUX2_DETALLE')]);
     if(pc1){ Object.assign(APERTURA_DETALLE,pc1); hubo=true; }
     if(pc2){ Object.assign(APERTURA_AUX2_DETALLE,pc2); hubo=true; } }
@@ -6323,7 +6355,7 @@ async function onCargarInformeCrudo(file){
       try{
         const resP=parseRawLedgerProyectos(rows);
         mergeProyCtrlIntoData(resP);
-        await guardarClave('PROY_CTRL',PROY_CTRL);
+        await guardarProyCtrl();
         initProy();
         msgEl.textContent+=" Control Proyectos actualizado: "+Object.keys(resP.proyectos).length+" proyectos con movimientos en este archivo.";
       }catch(e){ console.warn("proy:",e); msgEl.textContent+=" ⚠ No se pudo actualizar Control Proyectos: "+e.message; }
@@ -6364,7 +6396,7 @@ async function onCargarInformeCrudo(file){
           const agg=parseFn(rows);
           for(const k in destino) delete destino[k];
           Object.assign(destino,agg);
-          await guardarClave(destino===PROY_CTRL_OC?"PROY_CTRL_OC":"PROY_CTRL_PF",destino);
+          await guardarPorCuenta(destino===PROY_CTRL_OC?"PROY_CTRL_OC":"PROY_CTRL_PF",destino);
           initProy();
           msg.className="updmsg ok"; msg.textContent="✓ "+nombre+" actualizado: "+Object.keys(agg).length+" proyectos. Guardado en Supabase."+(parseFn===parseOCEmitidas&&OC_EXCLUIDAS.n?` Se excluyeron ${OC_EXCLUIDAS.n} renglones anulados ($ ${fmt(OC_EXCLUIDAS.ars)}).`:"");
         }catch(err){ msg.className="updmsg err"; msg.textContent="✗ Error al procesar "+nombre+": "+err.message; console.error(err); }
@@ -6392,7 +6424,7 @@ async function onCargarInformeCrudo(file){
         const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true});
         const resP=parseRawLedgerProyectos(rows);
         mergeProyCtrlIntoData(resP);
-        await guardarClave('PROY_CTRL',PROY_CTRL);
+        await guardarProyCtrl();
         initProy();
         msg.className="updmsg ok"; msg.textContent="✓ Control Proyectos actualizado (verificación, no toca Estado de Resultados): "+Object.keys(resP.proyectos).length+" proyectos. Guardado en Supabase.";
       }catch(err){ msg.className="updmsg err"; msg.textContent="✗ Error al procesar el informe: "+err.message; console.error(err); }
