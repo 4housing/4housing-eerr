@@ -5522,7 +5522,9 @@ function renderModulos(){
   { const t=document.getElementById("mdTabla");
     // en las tablas "grid" la clase fzr fija la columna a la derecha: acá los importes solo van alineados a la derecha
     t.querySelectorAll("td.fzr").forEach(td=>{ td.classList.remove("fzr"); td.style.textAlign="right"; td.style.whiteSpace="nowrap"; });
-    t.querySelectorAll("thead th:not(.fz)").forEach(th=>{ if(!/Tipolog|Estado/.test(th.textContent)) th.style.textAlign="right"; });
+    t.querySelectorAll("thead th:not(.fz)").forEach(th=>{ if(!/Tipolog|Estado/.test(th.textContent)){ th.style.textAlign="right"; th.style.whiteSpace="nowrap"; th.style.minWidth="84px"; } });
+    // importes: que una columna angosta no "pise" a la de al lado (ej. 586.0001.136.000 en la fila de total)
+    t.querySelectorAll("td").forEach(td=>{ if(td.style.textAlign==="right"){ td.style.overflow="hidden"; td.style.textOverflow="ellipsis"; td.style.paddingLeft="8px"; } });
     colResizeInit(t); requestAnimationFrame(()=>actualizarStickyPto("mdTabla")); }
   box.querySelectorAll(".md-mod").forEach(tr=>tr.addEventListener("click",ev=>{ if(ev.target.closest(".col-resizer")) return; const d=tr.dataset.d; MOD_UI.abiertos.has(d)?MOD_UI.abiertos.delete(d):MOD_UI.abiertos.add(d); renderModulos(); }));
 }
