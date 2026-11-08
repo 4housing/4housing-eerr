@@ -5606,7 +5606,8 @@ function exportModulos(){
 let MOD_FACT={fact:{},clientes:[],fecha:""}; // fact[serieNorm][mes]=[[comprobante,importe,idxCliente,tipo]]
 let MOD_MOVSER={rows:[],fecha:""};          // [fechaISO,comprobante,nro,movimiento,deposito,serie,articulo]
 let MOD_MODELOS={series:{},fecha:""};       // series[serieNorm]={mod,desc,hab,mon,precio,cant}
-let MOD_CTRL_COM={};                        // MODULOS_CTRL_COMENT {mes:{serieNorm:texto}}
+let MOD_CTRL_COM={};                        // MODULOS_CTRL_COMENT {mes:{serieNorm:texto}, _fijos:{serieNorm:{t,desde,hasta?}}}
+let MOD_CIERRES={};                         // MODULOS_CIERRE::AAAA-MM (una fila por mes cerrado) {fecha,usuario,fSeries,tot,filas}
 const MOD_ART_ALQ=/^V(BA|NQ)/i;
 function modRowsDeHoja(ws){
   // Algunos informes de Tango traen mal la "dimension" de la hoja (dice A1:A1): se recalcula con las celdas reales.
@@ -5681,7 +5682,9 @@ function modCtrlCalcular(mes){
   // Movimientos del mes y, como Series Activas es la foto del día en que se subió, también los posteriores al cierre
   // (ej. un contenedor devuelto en noviembre ya no figura alquilado en la foto aunque en octubre sí lo estaba).
   const movM={}; (MOD_MOVSER.rows||[]).forEach(r=>{ if(r[0].slice(0,7)<mes) return; const c=canon(modNorm(r[5])); (movM[c]||(movM[c]=[])).push(r); });
-  const com=MOD_CTRL_COM[mes]||{}, clis=MOD_PEDIDOS.clientes||[], fclis=MOD_FACT.clientes||[];
+  const com=Object.assign({},MOD_CTRL_COM[mes]||{}), clis=MOD_PEDIDOS.clientes||[], fclis=MOD_FACT.clientes||[], fijos={};
+  // comentario fijo (ej. "En litigio"): vale desde el mes en que se fijó y en los siguientes, hasta que se saque
+  Object.entries(MOD_CTRL_COM._fijos||{}).forEach(([k,x])=>{ if(x&&x.t&&x.desde<=mes&&(!x.hasta||mes<=x.hasta)){ fijos[k]=true; if(!com[k]) com[k]=x.t; } });
   const keys=new Set([...Object.keys(alq),...Object.keys(pedM),...Object.keys(facM),...Object.keys(arr)]);
   const filas=[...keys].map(k=>{
     const s=MOD_MAESTRO.series[k], a=!!alq[k], ped=pedM[k]||[], fac=facM[k]||[], cub=cubre[k]||[], mv=movM[k]||[], md=MOD_MODELOS.series[k]||MOD_MODELOS.series[modNorm(s&&s.alt)]||null;
@@ -5727,7 +5730,7 @@ function modCtrlCalcular(mes){
     const pk=MOD_PEDIDOS.ped[k]||{}, ys=Object.keys(pk).filter(y=>y<=mes).sort(), yl=ys[ys.length-1], ult=yl&&yl>=modMesMas(mes,-1)?pk[yl][0]:null;
     const codHoy=ult?modCodCli(ult[0]):"";
     return {k,serie:s?s.serie:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",codHoy,cliPed:[...new Set(ped.map(z=>modCodCli(z[0])))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
-      ped,impP,cub,fac,impF,mv,md,dif,avisos,notas,impPend,explic,estado,com:com[k]||""};
+      ped,impP,cub,fac,impF,mv,md,dif,avisos,notas,impPend,explic,estado,com:com[k]||"",comFijo:!!fijos[k]};
   });
   // nombre legible para lo que no está en Series Activas: el del pedido/factura no lo trae; se deja el normalizado
   const ordE={"SIN EXPLICAR":0,"Explicado":1,"OK":2};
@@ -5740,46 +5743,95 @@ function modCtrlCalcular(mes){
 function renderModCtrl(){
   const box=document.getElementById("mdCtrlBody"); if(!box) return;
   const sel=document.getElementById("mdCtrlMes"), meses=modCtrlMeses();
-  if(sel.options.length!==meses.length){ const v=sel.value; sel.innerHTML=""; meses.slice().reverse().forEach(m=>sel.add(new Option(mesLabel(m),m))); if(v&&meses.includes(v)) sel.value=v; }
+  { const lab=m=>mesLabel(m)+(MOD_CIERRES[m]?" · cerrado":""), firma=meses.map(lab).join("|");
+    if(sel.dataset.firma!==firma){ const v=sel.value; sel.innerHTML=""; meses.slice().reverse().forEach(m=>sel.add(new Option(lab(m),m))); if(v&&meses.includes(v)) sel.value=v; sel.dataset.firma=firma; } }
   const mes=sel.value;
   const falta=[!Object.keys(MOD_MAESTRO.series||{}).length&&"Series Activas",!Object.keys(MOD_PEDIDOS.ped||{}).length&&"Pedidos",!Object.keys(MOD_FACT.fact||{}).length&&"Res x Art Mensual (facturación)",!(MOD_MOVSER.rows||[]).length&&"Movimientos de series",!Object.keys(MOD_MODELOS.series||{}).length&&"Modelos de pedidos"].filter(Boolean);
   if(!mes){ box.innerHTML=`<div class="note">Para el control subí con "Cargar informes de módulos": ${falta.join(", ")}.</div>`; return; }
-  const {filas,tot}=modCtrlCalcular(mes), solo=document.getElementById("mdCtrlSolo").checked, puede=puedeEditar("modulos");
-  const sinImp=tot.sin.reduce((x,f)=>x+Math.max(Math.abs(f.impP),Math.abs(f.impF)),0);
+  const cie=MOD_CIERRES[mes], solo=document.getElementById("mdCtrlSolo").checked, puede=puedeEditar("modulos");
+  const snap=cie||modCtrlFoto(mes), tot=snap.tot, editable=puede&&!cie, sinPend=!cie&&modCtrlSinPend(mes);
   const cards=`<div class="cc-grid" style="margin:4px 0 10px">
-    <div class="cc-cell"><span>Alquilados (Series Activas al ${esc(MOD_MAESTRO.fSeries||"—")})</span><b>${tot.alq}</b></div>
+    <div class="cc-cell"><span>Alquilados (Series Activas al ${esc(snap.fSeries||"—")})</span><b>${tot.alq}</b></div>
     <div class="cc-cell"><span>Pedidos de alquiler del mes</span><b>${tot.ped}</b><small>$ ${fmt(tot.impP)}</small></div>
     <div class="cc-cell"><span>Facturado del mes</span><b>${tot.fac}</b><small>$ ${fmt(tot.impF)}</small></div>
     <div class="cc-cell cc-ok"><span>OK</span><b>${tot.ok}</b><small>${tot.exp} con diferencia explicada</small></div>
-    <div class="cc-cell ${tot.sin.length?"cc-warn":"cc-ok"}"><span>SIN EXPLICAR (debe dar 0)</span><b>${tot.sin.length}</b><small>${tot.sin.length?"$ "+fmt(sinImp):"todo cuadra"}</small></div>
+    <div class="cc-cell ${tot.sin?"cc-warn":"cc-ok"}"><span>SIN EXPLICAR (debe dar 0)</span><b>${tot.sin}</b><small>${tot.sin?"$ "+fmt(tot.sinImp):"todo cuadra"}</small></div>
     <div class="cc-cell ${tot.pend?"cc-warn":"cc-ok"}"><span>Pedidos pendientes de facturar (del mes y anteriores)</span><b>${tot.pend}</b><small>$ ${fmt(tot.impPend)}</small></div>
     <div class="cc-cell ${tot.av?"cc-warn":""}"><span>Avisos (modelo / importe)</span><b>${tot.av}</b></div></div>`;
-  const ver=filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
+  const banda=cie
+    ?`<div class="updmsg ok" style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">🔒 <b>${esc(mesLabel(mes))} cerrado</b> el ${esc(cie.fecha)}${cie.usuario?" por "+esc(cie.usuario):""}. Se muestra la foto del cierre: no cambia aunque subas informes nuevos.${puede?` <button class="btn" id="mdCtrlReabrir">Reabrir mes</button>`:""}</div>`
+    :(puede?`<div style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn updbtn" id="mdCtrlCerrar">Cerrar ${esc(mesLabel(mes))}</button><span class="note" style="font-size:11.5px">Guarda una foto del control: el mes queda congelado. Los pedidos que queden pendientes siguen apareciendo en los meses siguientes hasta que se facturen.</span></div>`:"");
+  const ver=snap.filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
   const clsE=e=>e==="OK"?"pos":e==="Explicado"?"":"neg";
   const rows=ver.map(f=>`<tr><td class="fz1"><b>${esc(f.desc)}</b>${f.tipo?`<div class="note" style="font-size:10.5px">${esc(f.tipo)}</div>`:""}</td>
     <td style="text-align:left;font-size:11.5px" title="${esc(f.dep)}">${f.alq?"Sí · "+esc(f.codHoy||f.dep):"<span style='opacity:.6'>No</span>"}</td>
-    <td style="text-align:left;font-size:11.5px" title="${esc([...new Set(f.ped.map(z=>(MOD_PEDIDOS.clientes||[])[z[0]]||""))].join(", "))}">${f.ped.length?esc(f.cliPed)+" · "+f.ped.map(z=>"#"+esc(z[2])).join(" "):(f.cub.length?`<span title="pedido de ${f.cub[0][1]} meses">cubierto por pedido de ${esc(mesLabel(f.cub[0][0]))} (${f.cub[0][1]} m.)</span>`:"–")}</td>
+    <td style="text-align:left;font-size:11.5px" title="${esc(f.pedTit)}">${f.pedNros?esc(f.cliPed)+" · "+esc(f.pedNros.split(" ").map(n=>"#"+n).join(" ")):(f.cubTxt?`cubierto por pedido de ${esc(f.cubTxt)}`:"–")}</td>
     <td class="fzr">${f.impP?fmt(f.impP):"–"}</td>
-    <td style="text-align:left;font-size:11.5px">${f.fac.length?esc(f.cliFac)+" · "+f.fac.map(z=>esc(z[3]+" "+z[0])).join(" "):"–"}</td>
+    <td style="text-align:left;font-size:11.5px">${f.comps?esc(f.cliFac)+" · "+esc(f.comps):"–"}</td>
     <td class="fzr">${f.impF?fmt(f.impF):"–"}</td>
-    <td style="text-align:left;font-size:11.5px">${f.md?esc(f.md.mod)+(/^no$/i.test(f.md.hab)?" (deshab.)":""):"–"}</td>
+    <td style="text-align:left;font-size:11.5px">${f.mod?esc(f.mod)+(/^no$/i.test(f.hab)?" (deshab.)":""):"–"}</td>
     <td class="${clsE(f.estado)}" style="text-align:left;font-weight:600">${esc(f.estado)}</td>
-    <td style="text-align:left;font-size:11.5px">${esc(f.dif.join(" · "))}${f.notas.length?`<div class="note" style="font-size:10.5px">${esc(f.notas.join(" · "))}</div>`:""}${f.avisos.length?`<div style="color:#b5462a">⚠ ${esc(f.avisos.join(" · "))}</div>`:""}${f.mv.length?`<div class="note" style="font-size:10.5px">Mov.: ${esc(f.mv.map(r=>`${r[1]} ${r[3]} ${r[4]} ${r[0].slice(8,10)}/${r[0].slice(5,7)}`).join(" | "))}</div>`:""}</td>
-    <td>${f.dif.length||f.com?`<input class="txt md-ctrl-com" data-k="${esc(f.k)}" value="${esc(f.com)}" placeholder="${puede?"Explicación…":""}" style="width:220px"${puede?"":" disabled"}>`:""}</td></tr>`).join("");
-  box.innerHTML=cards+(falta.length?`<div class="note" style="font-size:11.5px;margin-bottom:6px">⚠ Falta cargar: ${esc(falta.join(", "))} — el control puede dar diferencias falsas.</div>`:"")+
+    <td style="text-align:left;font-size:11.5px">${esc(f.dif.join(" · "))}${f.notas.length?`<div class="note" style="font-size:10.5px">${esc(f.notas.join(" · "))}</div>`:""}${f.avisos.length?`<div style="color:#b5462a">⚠ ${esc(f.avisos.join(" · "))}</div>`:""}${f.mvCorto?`<div class="note" style="font-size:10.5px">Mov.: ${esc(f.mvCorto)}</div>`:""}</td>
+    <td style="white-space:nowrap">${f.dif.length||f.com?(cie?esc(f.com)+(f.comFijo?" 📌":""):`<input class="txt md-ctrl-com" data-k="${esc(f.k)}" value="${esc(f.com)}" placeholder="${editable?"Explicación…":""}" style="width:200px"${editable?"":" disabled"}>
+      <label title="Comentario fijo: vale para este mes y los siguientes hasta que lo destildes (ej. contenedor en litigio)" style="font-size:11px;display:inline-flex;gap:3px;align-items:center"><input type="checkbox" class="md-ctrl-fijo" data-k="${esc(f.k)}"${f.comFijo?" checked":""}${editable?"":" disabled"}>📌 fijo</label>`):""}</td></tr>`).join("");
+  const avisoPend=sinPend?`<div class="updmsg err" style="margin:0 0 8px">⚠ Los pedidos de ${esc(mesLabel(mes))} se cargaron con un informe viejo que no trae lo <b>pendiente de facturar</b>. Volvé a subir el informe de Pedidos (Informes_Pedido_Por_fecha_De_Entrega) antes de cerrar el mes: si no, un pedido sin facturar puede figurar como OK.</div>`:"";
+  box.innerHTML=banda+avisoPend+cards+(falta.length&&!cie?`<div class="note" style="font-size:11.5px;margin-bottom:6px">⚠ Falta cargar: ${esc(falta.join(", "))} — el control puede dar diferencias falsas.</div>`:"")+
     `<div class="table-wrap"><table id="mdCtrlTabla"><thead><tr><th class="fz1">Contenedor</th><th style="text-align:left">Alquilado (Series)</th><th style="text-align:left">Pedido del mes</th><th>Importe pedido</th><th style="text-align:left">Factura del mes</th><th>Importe facturado</th><th style="text-align:left">Modelo</th><th style="text-align:left">Estado</th><th style="text-align:left">Diferencia / movimiento</th><th style="text-align:left">Comentario</th></tr></thead><tbody>${rows||`<tr><td colspan="10" class="note">Sin diferencias: todo cuadra.</td></tr>`}</tbody></table></div>
-    <div class="foot">Alquilados = Series Activas con depósito de cliente (foto del día en que se subió: subila al cierre del mes). Pedido = alquiler con fecha de entrega en el mes (un pedido de N meses cubre los siguientes). Factura = Res x Art Mensual del mes (N/C restan). Una diferencia queda explicada si el contenedor tuvo movimiento de series en el mes (o después del cierre, hasta la foto de Series Activas) o si tiene comentario. El aviso de importe aparece si lo facturado difiere más de 3% de lo pedido (en US$ para pedidos de varios meses con lista en dólares).</div>`;
-  if(puede) box.querySelectorAll(".md-ctrl-com").forEach(inp=>inp.addEventListener("change",async()=>{
-    try{ const act=(await cargarClave("MODULOS_CTRL_COMENT"))||{}; if(!act[mes]) act[mes]={}; const t=inp.value.trim(); if(t) act[mes][inp.dataset.k]=t; else delete act[mes][inp.dataset.k];
-      await guardarClave("MODULOS_CTRL_COMENT",act); MOD_CTRL_COM=act; renderModCtrl(); }catch(e){ console.warn("comentario control:",e); } }));
+    <div class="foot">Alquilados = Series Activas con depósito de cliente (foto del día en que se subió: subila al cierre del mes). Pedido = alquiler con fecha de entrega en el mes (un pedido de N meses cubre los siguientes). Pendiente de facturar = lo que el pedido tiene pendiente en Tango (subí el informe de pedidos actualizado); los pendientes de meses anteriores se arrastran. Factura = facturación del mes (N/C restan); si su importe es igual al de un pedido de un mes anterior se marca como mes vencido. Una diferencia queda explicada si el contenedor tuvo movimiento de series en el mes (o después del cierre, hasta la foto de Series Activas) o si tiene comentario (📌 fijo = vale para los meses siguientes). El aviso de importe aparece si lo facturado difiere más de 3% de lo pedido (en US$ para pedidos de varios meses con lista en dólares).</div>`;
+  if(editable){
+    box.querySelectorAll(".md-ctrl-com").forEach(inp=>inp.addEventListener("change",()=>modCtrlGuardarCom(mes,inp.dataset.k,inp.value.trim(),null)));
+    box.querySelectorAll(".md-ctrl-fijo").forEach(ch=>ch.addEventListener("change",()=>{ const inp=box.querySelector(`.md-ctrl-com[data-k="${CSS.escape(ch.dataset.k)}"]`); modCtrlGuardarCom(mes,ch.dataset.k,inp?inp.value.trim():"",ch.checked); }));
+  }
+  const bc=document.getElementById("mdCtrlCerrar"); if(bc) bc.onclick=()=>modCtrlCerrar(mes,snap,sinPend);
+  const br=document.getElementById("mdCtrlReabrir"); if(br) br.onclick=()=>modCtrlReabrir(mes);
+}
+/* true si algún pedido del mes se cargó sin las columnas de pendiente de facturar (informe anterior a la versión con IMPOR_PEND) */
+function modCtrlSinPend(mes){ return Object.values(MOD_PEDIDOS.ped||{}).some(p=>(p[mes]||[]).some(z=>!(z.length>6&&z[6]!=null))); }
+/* fijo: null = solo cambia el texto; true = fijar desde este mes; false = dejar de fijar (sigue valiendo hasta el mes anterior) */
+async function modCtrlGuardarCom(mes,k,t,fijo){
+  try{ const act=(await cargarClave("MODULOS_CTRL_COMENT"))||{}; if(!act[mes]) act[mes]={}; const fj=act._fijos||(act._fijos={}), x=fj[k];
+    const vigente=x&&x.desde<=mes&&(!x.hasta||mes<=x.hasta);
+    const sacar=()=>{ if(x.desde>=mes) delete fj[k]; else x.hasta=modMesMas(mes,-1); };
+    if(fijo===true){ const txt=t||act[mes][k]||""; if(!txt){ alert("Escribí el comentario antes de fijarlo."); renderModCtrl(); return; } fj[k]={t:txt,desde:mes}; delete act[mes][k]; }
+    else if(fijo===false){ if(x) sacar(); if(t) act[mes][k]=t; }
+    else if(vigente){ if(t) x.t=t; else sacar(); }
+    else { if(t) act[mes][k]=t; else delete act[mes][k]; }
+    const r=await guardarClave("MODULOS_CTRL_COMENT",act); if(r&&!r.ok) alert("No se pudo guardar el comentario: "+r.error);
+    MOD_CTRL_COM=act; renderModCtrl(); }catch(e){ console.warn("comentario control:",e); }
+}
+/* Foto plana del control (lo que se muestra y se exporta); es lo que se guarda al cerrar el mes. */
+function modCtrlFoto(mes){
+  const {filas,tot}=modCtrlCalcular(mes), clis=MOD_PEDIDOS.clientes||[];
+  return {fSeries:MOD_MAESTRO.fSeries||"",
+    tot:{alq:tot.alq,ped:tot.ped,impP:tot.impP,fac:tot.fac,impF:tot.impF,ok:tot.ok,exp:tot.exp,sin:tot.sin.length,
+      sinImp:tot.sin.reduce((x,f)=>x+Math.max(Math.abs(f.impP),Math.abs(f.impF)),0),pend:tot.pend,impPend:tot.impPend,av:tot.av},
+    filas:filas.map(f=>({k:f.k,desc:f.desc,tipo:f.tipo,alq:f.alq,dep:f.dep,codHoy:f.codHoy,cliPed:f.cliPed,pedTit:[...new Set(f.ped.map(z=>clis[z[0]]||""))].join(", "),
+      pedNros:f.ped.map(z=>z[2]).join(" "),impP:f.impP,cubTxt:f.cub.length?`${mesLabel(f.cub[0][0])} (${f.cub[0][1]} m.)`:"",cliFac:f.cliFac,comps:f.fac.map(z=>z[3]+" "+z[0]).join(" "),impF:f.impF,
+      mod:f.md?f.md.mod:"",hab:f.md?f.md.hab:"",estado:f.estado,dif:f.dif,notas:f.notas,avisos:f.avisos,impPend:f.impPend,
+      mvCorto:f.mv.map(r=>`${r[1]} ${r[3]} ${r[4]} ${r[0].slice(8,10)}/${r[0].slice(5,7)}`).join(" | "),mvLargo:f.mv.map(r=>`${r[0]} ${r[1]} ${r[3]} ${r[4]}`).join(" | "),com:f.com,comFijo:f.comFijo}))};
+}
+async function modCtrlCerrar(mes,snap,sinPend){
+  if(!puedeEditar("modulos")) return;
+  if(!confirm(`Cerrar ${mesLabel(mes)}: se guarda la foto del control tal como se ve ahora y ya no cambia con informes nuevos.`+(sinPend?`\n\n⚠ ATENCIÓN: los pedidos del mes no traen lo pendiente de facturar (informe viejo). Conviene volver a subir el informe de Pedidos antes de cerrar.`:"")+(snap.tot.sin?`\n\nQuedan ${snap.tot.sin} SIN EXPLICAR.`:"")+(snap.tot.pend?`\nQuedan ${snap.tot.pend} pedidos pendientes de facturar ($ ${fmt(snap.tot.impPend)}): van a seguir apareciendo en los meses siguientes hasta que se facturen.`:"")+"\n\n¿Cerrar el mes?")) return;
+  const foto=Object.assign({fecha:new Date().toLocaleString("es-AR"),usuario:PERM_EERR.nombre||""},snap);
+  const r=await guardarClave("MODULOS_CIERRE"+SEP_CLAVE+mes,foto); if(r&&!r.ok){ alert("No se pudo guardar el cierre: "+r.error); return; }
+  const idx=Object.keys(MOD_CIERRES).concat(mes).filter((m,i,a)=>a.indexOf(m)===i).sort();
+  const r2=await guardarClave("MODULOS_CIERRE"+SEP_CLAVE+"__indice__",idx); if(r2&&!r2.ok){ alert("No se pudo guardar el índice de cierres: "+r2.error); return; }
+  MOD_CIERRES[mes]=foto; renderModCtrl();
+}
+async function modCtrlReabrir(mes){
+  if(!puedeEditar("modulos")||!confirm(`Reabrir ${mesLabel(mes)}: el control vuelve a calcularse con los informes cargados hoy (se descarta la foto del cierre). ¿Seguir?`)) return;
+  const idx=Object.keys(MOD_CIERRES).filter(m=>m!==mes).sort();
+  const r=await guardarClave("MODULOS_CIERRE"+SEP_CLAVE+"__indice__",idx); if(r&&!r.ok){ alert("No se pudo reabrir: "+r.error); return; }
+  delete MOD_CIERRES[mes]; renderModCtrl();
 }
 function exportModCtrl(){
   const mes=document.getElementById("mdCtrlMes").value; if(!mes) return;
-  const {filas,tot}=modCtrlCalcular(mes), E=XLSX_EST, c=(v,s)=>({v,s});
-  const hdr=["Contenedor","Tipología","Alquilado","Depósito / cliente","Cliente pedido","Pedidos","Importe pedido","Cubierto por pedido anterior","Cliente factura","Comprobantes","Importe facturado","Modelo","Habilitado","Estado","Diferencia","Avisos","Movimientos de series","Comentario"];
-  const rows=[{cells:[c(`Control de facturación de alquileres · ${mesLabel(mes)}`,E.title)],ht:22},{cells:[c(`Alquilados ${tot.alq} · Pedidos ${tot.ped} ($ ${fmt(tot.impP)}) · Facturados ${tot.fac} ($ ${fmt(tot.impF)}) · OK ${tot.ok} · Explicados ${tot.exp} · SIN EXPLICAR ${tot.sin.length}`,E.sub)]},{cells:hdr.map(h=>c(h,E.head)),ht:28}];
-  filas.forEach(f=>rows.push({cells:[c(f.desc,E.txt),c(f.tipo,E.txt),c(f.alq?"Sí":"No",E.txt),c(f.dep,E.txt),c(f.cliPed,E.txt),c(f.ped.map(z=>z[2]).join(" "),E.txt),c(f.impP,E.num),c(f.cub.length?`${mesLabel(f.cub[0][0])} (${f.cub[0][1]} m.)`:"",E.txt),c(f.cliFac,E.txt),c(f.fac.map(z=>z[3]+" "+z[0]).join(" "),E.txt),c(f.impF,E.num),c(f.md?f.md.mod:"",E.txt),c(f.md?f.md.hab:"",E.txt),c(f.estado,f.estado==="SIN EXPLICAR"?E.numOver:E.txt),c(f.dif.concat(f.notas).join(" · "),E.txt),c(f.avisos.join(" · "),E.txt),c(f.mv.map(r=>`${r[0]} ${r[1]} ${r[3]} ${r[4]}`).join(" | "),E.txt),c(f.com,E.txt)]}));
-  xlsxDescargar([{name:"Control facturación",cols:[18,28,9,26,26,16,14,18,14,30,14,12,10,14,34,34,40,30],rows,freeze:{r:3,c:1},filter:{r0:2,c0:0,r1:rows.length-1,c1:hdr.length-1},merges:["A1:R1","A2:R2"]}],"$",`control_facturacion_${mes}.xlsx`);
+  const cie=MOD_CIERRES[mes], snap=cie||modCtrlFoto(mes), tot=snap.tot, E=XLSX_EST, c=(v,s)=>({v,s});
+  const hdr=["Contenedor","Tipología","Alquilado","Depósito / cliente","Cliente pedido","Pedidos","Importe pedido","Cubierto por pedido anterior","Cliente factura","Comprobantes","Importe facturado","Modelo","Habilitado","Estado","Diferencia","Avisos","Movimientos de series","Comentario","Pendiente de facturar"];
+  const rows=[{cells:[c(`Control de facturación de alquileres · ${mesLabel(mes)}${cie?` · cerrado el ${cie.fecha}${cie.usuario?" por "+cie.usuario:""}`:" · abierto"}`,E.title)],ht:22},{cells:[c(`Alquilados ${tot.alq} · Pedidos ${tot.ped} ($ ${fmt(tot.impP)}) · Facturados ${tot.fac} ($ ${fmt(tot.impF)}) · OK ${tot.ok} · Explicados ${tot.exp} · SIN EXPLICAR ${tot.sin} · Pendientes de facturar ${tot.pend} ($ ${fmt(tot.impPend)})`,E.sub)]},{cells:hdr.map(h=>c(h,E.head)),ht:28}];
+  snap.filas.forEach(f=>rows.push({cells:[c(f.desc,E.txt),c(f.tipo,E.txt),c(f.alq?"Sí":"No",E.txt),c(f.dep,E.txt),c(f.cliPed,E.txt),c(f.pedNros,E.txt),c(f.impP,E.num),c(f.cubTxt,E.txt),c(f.cliFac,E.txt),c(f.comps,E.txt),c(f.impF,E.num),c(f.mod,E.txt),c(f.hab,E.txt),c(f.estado,f.estado==="SIN EXPLICAR"?E.numOver:E.txt),c(f.dif.concat(f.notas).join(" · "),E.txt),c(f.avisos.join(" · "),E.txt),c(f.mvLargo,E.txt),c(f.com+(f.comFijo?" (fijo)":""),E.txt),c(f.impPend||0,E.num)]}));
+  xlsxDescargar([{name:"Control facturación",cols:[18,28,9,26,26,16,14,18,14,30,14,12,10,14,34,34,40,30,14],rows,freeze:{r:3,c:1},filter:{r0:2,c0:0,r1:rows.length-1,c1:hdr.length-1},merges:["A1:S1","A2:S2"]}],"$",`control_facturacion_${mes}.xlsx`);
 }
 function showModSub(s){ MOD_UI.sub=s; if(s==="old"){ document.getElementById("mdNuevo").style.display="none"; document.getElementById("mdViejo").style.display=""; document.querySelectorAll(".md-subbtn").forEach(b=>b.classList.toggle("active",b.dataset.s==="old")); renderControlModulos(); return; }
   document.getElementById("mdNuevo").style.display=""; document.getElementById("mdViejo").style.display="none"; renderModulos(); }
@@ -6520,6 +6572,7 @@ async function onCargarInformeCrudo(file){
   initPtoApertura();
   try{ const [mf,ms,mo,mc]=await Promise.all([cargarClave("MODULOS_FACT"),cargarClave("MODULOS_MOVSER"),cargarClave("MODULOS_MODELOS"),cargarClave("MODULOS_CTRL_COMENT")]);
     if(mf) MOD_FACT=Object.assign({fact:{},clientes:[]},mf); if(ms) MOD_MOVSER=Object.assign({rows:[]},ms); if(mo) MOD_MODELOS=Object.assign({series:{}},mo); if(mc) MOD_CTRL_COM=mc; }catch(e){ console.warn("control facturacion:",e); }
+  try{ const ci=await cargarPorCuenta("MODULOS_CIERRE"); if(ci) MOD_CIERRES=ci; }catch(e){ console.warn("cierres control:",e); }
   try{ const [mm,ma,mp]=await Promise.all([cargarClave("MODULOS_MOV"),cargarClave("MODULOS_MAESTRO"),cargarClave("MODULOS_PEDIDOS")]);
     if(mm){ MOD_MOV.meses=completarMeses(mm.meses||[]); MOD_MOV.mods=mm.mods||{}; MOD_MOV.ing=mm.ing||{}; }
     if(ma) MOD_MAESTRO=Object.assign({series:{},precios:{}},ma); if(mp) MOD_PEDIDOS=Object.assign({clientes:[],ped:{}},mp); MOD_IDX=null; }catch(e){ console.warn("modulos:",e); }
