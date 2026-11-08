@@ -160,6 +160,10 @@ table.grid{position:relative;}
 table.grid th{position:relative;}
 table.grid th .col-resizer{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;z-index:8;}
 table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rgba(95,122,78,.25);}
+#mdCtrlTabla{position:relative;}#mdCtrlTabla th{position:relative;}
+#mdCtrlTabla th .col-resizer{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;z-index:8;}
+#mdCtrlTabla th .col-resizer:hover,#mdCtrlTabla th .col-resizer.active{background:rgba(95,122,78,.25);}
+#mdCtrlTabla td{overflow:hidden;overflow-wrap:anywhere;}
 .vig-link:hover{opacity:1!important;}
 .ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .bar{display:flex;gap:8px;justify-content:flex-end;margin:4px 0 10px;}
@@ -203,6 +207,7 @@ table.grid th .col-resizer:hover,table.grid th .col-resizer.active{background:rg
 .cmvctrl{margin:10px 0;padding:12px 14px;background:#fff;border:1px solid #e6ddcb;border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .cc-h{font-size:12px;font-weight:600;color:#7a6a4f;margin-bottom:6px}
 .cc-grid{display:flex;gap:10px;flex-wrap:wrap}
+.mdc-asc::after{content:" ▲";font-size:9px;color:#1a7a3a;font-weight:900}.mdc-desc::after{content:" ▼";font-size:9px;color:#1a7a3a;font-weight:900}
 .cc-cell{flex:1;min-width:170px;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border-radius:8px;background:#faf6ec}
 .cc-cell small{font-size:10.5px;color:#8a7a5f}.cc-cell span{font-size:11px;color:#8a7a5f}.cc-cell b{font-size:17px;color:#3a3329}
 .cc-ok{background:#eaf6ea}.cc-ok b{color:#2c7a2c}
@@ -5761,7 +5766,11 @@ function renderModCtrl(){
   const banda=cie
     ?`<div class="updmsg ok" style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">🔒 <b>${esc(mesLabel(mes))} cerrado</b> el ${esc(cie.fecha)}${cie.usuario?" por "+esc(cie.usuario):""}. Se muestra la foto del cierre: no cambia aunque subas informes nuevos.${puede?` <button class="btn" id="mdCtrlReabrir">Reabrir mes</button>`:""}</div>`
     :(puede?`<div style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn updbtn" id="mdCtrlCerrar">Cerrar ${esc(mesLabel(mes))}</button><span class="note" style="font-size:11.5px">Guarda una foto del control: el mes queda congelado. Los pedidos que queden pendientes siguen apareciendo en los meses siguientes hasta que se facturen.</span></div>`:"");
-  const ver=snap.filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
+  const ver0=snap.filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
+  window.MDC_FILAS_TODAS=ver0;
+  const ver=ver0.filter(mdcRowPass);
+  if(MDC_SORT){ const {col,dir}=MDC_SORT, num=MDC_NUM.has(col), v=f=>{ const x=mdcValores(f,col); return num?(+x[0]||0):String(x[0]||""); };
+    ver.sort((a,b)=>{ const x=v(a),y=v(b); return (num?x-y:x.localeCompare(y,"es",{numeric:true}))*dir; }); }
   const clsE=e=>e==="OK"?"pos":e==="Explicado"?"":"neg";
   const rows=ver.map(f=>`<tr><td class="fz1"><b>${esc(f.desc)}</b>${f.tipo?`<div class="note" style="font-size:10.5px">${esc(f.tipo)}</div>`:""}</td>
     <td style="text-align:left;font-size:11.5px" title="${esc(f.dep)}">${f.alq?"Sí · "+esc(f.codHoy||f.dep):"<span style='opacity:.6'>No</span>"}</td>
@@ -5776,8 +5785,9 @@ function renderModCtrl(){
       <label title="Comentario fijo: vale para este mes y los siguientes hasta que lo destildes (ej. contenedor en litigio)" style="font-size:11px;display:inline-flex;gap:3px;align-items:center"><input type="checkbox" class="md-ctrl-fijo" data-k="${esc(f.k)}"${f.comFijo?" checked":""}${editable?"":" disabled"}>📌 fijo</label>`):""}</td></tr>`).join("");
   const avisoPend=sinPend?`<div class="updmsg err" style="margin:0 0 8px">⚠ Los pedidos de ${esc(mesLabel(mes))} se cargaron con un informe viejo que no trae lo <b>pendiente de facturar</b>. Volvé a subir el informe de Pedidos (Informes_Pedido_Por_fecha_De_Entrega) antes de cerrar el mes: si no, un pedido sin facturar puede figurar como OK.</div>`:"";
   box.innerHTML=banda+avisoPend+cards+(falta.length&&!cie?`<div class="note" style="font-size:11.5px;margin-bottom:6px">⚠ Falta cargar: ${esc(falta.join(", "))} — el control puede dar diferencias falsas.</div>`:"")+
-    `<div class="table-wrap"><table id="mdCtrlTabla"><thead><tr><th class="fz1">Contenedor</th><th style="text-align:left">Alquilado (Series)</th><th style="text-align:left">Pedido del mes</th><th>Importe pedido</th><th style="text-align:left">Factura del mes</th><th>Importe facturado</th><th style="text-align:left">Modelo</th><th style="text-align:left">Estado</th><th style="text-align:left">Diferencia / movimiento</th><th style="text-align:left">Comentario</th></tr></thead><tbody>${rows||`<tr><td colspan="10" class="note">Sin diferencias: todo cuadra.</td></tr>`}</tbody></table></div>
+    `<div class="table-wrap"><table id="mdCtrlTabla"><thead><tr>${mdcTh("Contenedor","cont",0,"fz1")}${mdcTh("Alquilado (Series)","alq")}${mdcTh("Pedido del mes","ped")}${mdcTh("Importe pedido","impP",1)}${mdcTh("Factura del mes","fac")}${mdcTh("Importe facturado","impF",1)}${mdcTh("Modelo","mod")}${mdcTh("Estado","estado")}${mdcTh("Diferencia / movimiento","dif")}${mdcTh("Comentario","com")}</tr></thead><tbody>${rows||`<tr><td colspan="10" class="note">${Object.keys(MDC_COL_FILTRO).length?"Ninguna fila con los filtros de columna elegidos.":"Sin diferencias: todo cuadra."}</td></tr>`}</tbody></table></div>
     <div class="foot">Alquilados = Series Activas con depósito de cliente (foto del día en que se subió: subila al cierre del mes). Pedido = alquiler con fecha de entrega en el mes (un pedido de N meses cubre los siguientes). Pendiente de facturar = lo que el pedido tiene pendiente en Tango (subí el informe de pedidos actualizado); los pendientes de meses anteriores se arrastran. Factura = facturación del mes (N/C restan); si su importe es igual al de un pedido de un mes anterior se marca como mes vencido. Una diferencia queda explicada si el contenedor tuvo movimiento de series en el mes (o después del cierre, hasta la foto de Series Activas) o si tiene comentario (📌 fijo = vale para los meses siguientes). El aviso de importe aparece si lo facturado difiere más de 3% de lo pedido (en US$ para pedidos de varios meses con lista en dólares).</div>`;
+  { const t=document.getElementById("mdCtrlTabla"); if(t) colResizeInit(t); }
   if(editable){
     box.querySelectorAll(".md-ctrl-com").forEach(inp=>inp.addEventListener("change",()=>modCtrlGuardarCom(mes,inp.dataset.k,inp.value.trim(),null)));
     box.querySelectorAll(".md-ctrl-fijo").forEach(ch=>ch.addEventListener("change",()=>{ const inp=box.querySelector(`.md-ctrl-com[data-k="${CSS.escape(ch.dataset.k)}"]`); modCtrlGuardarCom(mes,ch.dataset.k,inp?inp.value.trim():"",ch.checked); }));
@@ -5785,6 +5795,57 @@ function renderModCtrl(){
   const bc=document.getElementById("mdCtrlCerrar"); if(bc) bc.onclick=()=>modCtrlCerrar(mes,snap,sinPend);
   const br=document.getElementById("mdCtrlReabrir"); if(br) br.onclick=()=>modCtrlReabrir(mes);
 }
+/* Filtro/orden tipo Excel en el control de facturación (mismo popup que Presupuesto/Historial: ▼ con buscador,
+   clic en el título ordena) + columnas redimensionables (colResizeInit; el ancho queda guardado en el navegador).
+   Diferencia y avisos se filtran por tipo (sin números de pedido ni importes) y una fila puede tener varios. */
+const MDC_COL_FILTRO={}; let MDC_SORT=null; const MDC_NUM=new Set(["impP","impF"]);
+function mdcValores(f,col){
+  if(col==="cont") return [f.desc];
+  if(col==="alq") return [f.alq?(f.codHoy||f.dep||"Sí"):"No"];
+  if(col==="ped") return [f.pedNros?f.cliPed:(f.cubTxt?"Cubierto por pedido anterior":"(sin pedido)")];
+  if(col==="impP") return [f.impP||0];
+  if(col==="fac") return [f.comps?f.cliFac:"(sin factura)"];
+  if(col==="impF") return [f.impF||0];
+  if(col==="mod") return [f.mod?f.mod+(/^no$/i.test(f.hab)?" (deshab.)":""):"(sin modelo)"];
+  if(col==="estado") return [f.estado];
+  if(col==="dif"){ const n=x=>x.replace(/ #\d+/g,"").replace(/ \(\$ [^)]*\)/g,"").replace(/ de [a-z]{3}-\d{2}/g," de mes anterior").trim();
+    const v=f.dif.map(n).concat(f.avisos.map(a=>"⚠ "+a.split(/[\d(]/)[0].replace(/\s*US\$\s*$/,"").trim()));
+    if(f.notas.length) v.push("Facturado a mes vencido"); return v.length?v:["(sin diferencia)"]; }
+  if(col==="com") return [f.com?(f.comFijo?"📌 Comentario fijo":"Con comentario"):"(sin comentario)"];
+  return [""];
+}
+function mdcRowPass(f){ return Object.keys(MDC_COL_FILTRO).every(col=>{ const a=MDC_COL_FILTRO[col]; if(!a||!a.length) return true; const v=mdcValores(f,col).map(x=>MDC_NUM.has(col)?fmt(x):String(x)); return v.some(x=>a.includes(x)); }); }
+function mdcTh(label,col,der,cls){
+  const act=!!(MDC_COL_FILTRO[col]&&MDC_COL_FILTRO[col].length), so=MDC_SORT&&MDC_SORT.col===col;
+  return `<th${cls?` class="${cls}"`:""} style="text-align:${der?"right":"left"};white-space:nowrap"><span class="${so?(MDC_SORT.dir===1?"mdc-asc":"mdc-desc"):""}" style="cursor:pointer;user-select:none" onclick="mdcSortToggle('${col}')" title="Ordenar">${esc(label)}</span> <span class="ptofbtn" style="cursor:pointer;user-select:none" title="Filtrar (con buscador)" onclick="openMdcColFilter('${col}',event)"><span style="font-size:9px;${act?"color:#1a7a3a;font-weight:900":"color:var(--muted)"}">▼</span></span></th>`;
+}
+function openMdcColFilter(col,ev){
+  ev.stopPropagation(); const btn=ev.currentTarget; closePtoColFilter();
+  const s0=new Map(); (window.MDC_FILAS_TODAS||[]).forEach(f=>mdcValores(f,col).forEach(x=>s0.set(MDC_NUM.has(col)?fmt(x):String(x),x)));
+  let vals=[...s0.keys()];
+  if(MDC_NUM.has(col)) vals.sort((a,b)=>(+s0.get(a)||0)-(+s0.get(b)||0)); else vals.sort((a,b)=>a.localeCompare(b,'es',{numeric:true}));
+  const sel=MDC_COL_FILTRO[col]?new Set(MDC_COL_FILTRO[col]):new Set(vals);
+  const item=v=>'<label class="ptofitem" data-v="'+esc(v)+'" style="display:flex;align-items:center;gap:6px;padding:3px 4px;cursor:pointer;font-size:12px"><input type="checkbox" class="ptofchk" value="'+esc(v)+'" '+(sel.has(v)?'checked':'')+'>'+esc(v)+'</label>';
+  const pop=document.createElement('div'); pop.id='ptoFilterPop';
+  pop.style.cssText='position:absolute;z-index:9999;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px;min-width:190px;max-width:340px;font-size:12.5px';
+  pop.innerHTML='<input type="text" placeholder="Buscar" oninput="ptoColFilterSearch(this.value)" style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:7px;padding:6px 8px;margin-bottom:6px;font-size:12.5px">'
+    +'<label style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-weight:700;border-bottom:1px solid var(--line);margin-bottom:4px;cursor:pointer"><input type="checkbox" '+(sel.size===vals.length?'checked':'')+' onchange="ptoColFilterToggleAll(this.checked)">(Seleccionar todo)</label>'
+    +'<div id="ptofList" style="max-height:260px;overflow:auto">'+vals.map(item).join('')+'</div>'
+    +'<div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1;padding:6px" onclick="mdcColFilterApply(\''+col+'\')">Aplicar</button><button class="btn" style="flex:1;padding:6px" onclick="mdcColFilterClear(\''+col+'\')">Limpiar</button></div>';
+  document.body.appendChild(pop);
+  const r=btn.getBoundingClientRect(), vw=document.documentElement.clientWidth;
+  pop.style.top=(window.scrollY+r.bottom+4)+'px'; pop.style.left=(window.scrollX+Math.max(8,Math.min(r.left,vw-350)))+'px';
+  const q=pop.querySelector('input[type=text]'); if(q) q.focus();
+  setTimeout(()=>document.addEventListener('mousedown',ptoColFilterOutside,true),0);
+}
+function mdcColFilterApply(col){
+  const all=[...document.querySelectorAll('#ptofList .ptofchk')], vis=all.filter(c=>{ const it=c.closest('.ptofitem'); return it&&it.style.display!=='none'; }), chk=vis.filter(c=>c.checked).map(c=>c.value);
+  if(vis.length===all.length&&chk.length===all.length) delete MDC_COL_FILTRO[col]; else MDC_COL_FILTRO[col]=chk;
+  closePtoColFilter(); renderModCtrl();
+}
+function mdcColFilterClear(col){ delete MDC_COL_FILTRO[col]; closePtoColFilter(); renderModCtrl(); }
+function mdcSortToggle(col){ MDC_SORT=(!MDC_SORT||MDC_SORT.col!==col)?{col,dir:1}:(MDC_SORT.dir===1?{col,dir:-1}:null); renderModCtrl(); }
+window.openMdcColFilter=openMdcColFilter; window.mdcColFilterApply=mdcColFilterApply; window.mdcColFilterClear=mdcColFilterClear; window.mdcSortToggle=mdcSortToggle;
 /* true si algún pedido del mes se cargó sin las columnas de pendiente de facturar (informe anterior a la versión con IMPOR_PEND) */
 function modCtrlSinPend(mes){ return Object.values(MOD_PEDIDOS.ped||{}).some(p=>(p[mes]||[]).some(z=>!(z.length>6&&z[6]!=null))); }
 /* fijo: null = solo cambia el texto; true = fijar desde este mes; false = dejar de fijar (sigue valiendo hasta el mes anterior) */
