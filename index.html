@@ -5316,7 +5316,9 @@ function modLeerPedidos(rows){
     const serie=S(r[ix("DESC_ADI")]), f=parseFechaCell(r[ix("FEC_ENTREG")]); if(!serie||!f) return;
     const y=f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0");
     const cod=S(r[ix("COD_CLIENT")]), cli=S(r[ix("RAZON_SOCI")]), kc=cod||cli; if(!(kc in cIdx)){ cIdx[kc]=clientes.length; clientes.push(cli); codigos.push(cod||cli); }
-    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[kc],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")]),(()=>{ const fp=parseFechaCell(r[ix("FEC_PEDIDO")]); return fp?fp.toISOString().slice(0,10):""; })()]); n++;
+    const k=modNorm(serie), p=ped[k]||(ped[k]={}); (p[y]||(p[y]=[])).push([cIdx[kc],Math.round(N(r[ix("IMP_TOTAL")])),S(r[ix("NRO_PEDIDO")]).replace(/^0+/,""),N(r[ix("CANTPEDIDA")])||1,S(r[ix("ESTADO")]),(()=>{ const fp=parseFechaCell(r[ix("FEC_PEDIDO")]); return fp?fp.toISOString().slice(0,10):""; })(),
+      // pendiente de facturar según Tango (IMPOR_PEND / CANTPENFAC); null si el informe no trae esas columnas
+      ix("IMPOR_PEND")>=0?Math.round(N(r[ix("IMPOR_PEND")])):null, ix("CANTPENFAC")>=0?N(r[ix("CANTPENFAC")]):null]); n++;
   });
   return {clientes,codigos,ped,n};
 }
@@ -5669,23 +5671,40 @@ function modCtrlCalcular(mes){
     (p[mes]||[]).forEach(z=>{ (pedM[c]||(pedM[c]=[])).push(z); });
     Object.entries(p).forEach(([y,l])=>{ if(y>=mes) return; l.forEach(z=>{ const cant=Math.round(+z[3]||1); if(cant>1&&modMesMas(y,cant-1)>=mes) (cubre[c]||(cubre[c]=[])).push([y,cant,z[2]]); }); }); });
   const facM={}; Object.entries(MOD_FACT.fact||{}).forEach(([k,p])=>{ const c=canon(k); (p[mes]||[]).forEach(z=>(facM[c]||(facM[c]=[])).push(z)); });
+  // Pendiente de facturar según el propio pedido en Tango (IMPOR_PEND / CANTPENFAC). null = informe viejo sin esas columnas.
+  // Un pedido facturado en otro mes (ej. MAVSA a mes vencido) cuenta como facturado; uno pendiente de meses
+  // anteriores se arrastra a los meses siguientes hasta que se facture (a pedido de Micaela).
+  const pendDe=z=>(z.length>6&&z[6]!=null)?(z[6]>=1||(+z[7]||0)>0):null;
+  const pedPorSerie={}, arr={};
+  Object.entries(MOD_PEDIDOS.ped||{}).forEach(([k,p])=>{ const c=canon(k); pedPorSerie[c]=Object.assign(pedPorSerie[c]||{},p);
+    Object.entries(p).forEach(([y,l])=>{ if(y>=mes) return; l.forEach(z=>{ if(pendDe(z)===true) (arr[c]||(arr[c]=[])).push([y,z]); }); }); });
   // Movimientos del mes y, como Series Activas es la foto del día en que se subió, también los posteriores al cierre
   // (ej. un contenedor devuelto en noviembre ya no figura alquilado en la foto aunque en octubre sí lo estaba).
   const movM={}; (MOD_MOVSER.rows||[]).forEach(r=>{ if(r[0].slice(0,7)<mes) return; const c=canon(modNorm(r[5])); (movM[c]||(movM[c]=[])).push(r); });
   const com=MOD_CTRL_COM[mes]||{}, clis=MOD_PEDIDOS.clientes||[], fclis=MOD_FACT.clientes||[];
-  const keys=new Set([...Object.keys(alq),...Object.keys(pedM),...Object.keys(facM)]);
+  const keys=new Set([...Object.keys(alq),...Object.keys(pedM),...Object.keys(facM),...Object.keys(arr)]);
   const filas=[...keys].map(k=>{
     const s=MOD_MAESTRO.series[k], a=!!alq[k], ped=pedM[k]||[], fac=facM[k]||[], cub=cubre[k]||[], mv=movM[k]||[], md=MOD_MODELOS.series[k]||MOD_MODELOS.series[modNorm(s&&s.alt)]||null;
     const impP=ped.reduce((x,z)=>x+z[1],0), impF=fac.reduce((x,z)=>x+z[1],0);
     const tienePed=ped.length>0||cub.length>0, facNeta=fac.length&&Math.abs(impF)>=1;
+    const pend=ped.filter(z=>pendDe(z)===true), pedFacturado=ped.length>0&&ped.every(z=>pendDe(z)===false), ar=arr[k]||[];
+    const impPend=pend.reduce((x,z)=>x+z[6],0)+ar.reduce((x,[,z])=>x+z[6],0);
+    // facturas del mes que corresponden a un pedido de un mes anterior (mismo importe): se facturó a mes vencido
+    const pk0=pedPorSerie[k]||{}, notas=[], facVencida=new Set();
+    fac.filter(z=>!/^N\/?C/i.test(z[3])).forEach(z=>{ for(let i=1;i<=3;i++){ const y=modMesMas(mes,-i), q=(pk0[y]||[]).find(w=>Math.abs(w[1]-z[1])<=1);
+      if(q){ facVencida.add(z); notas.push(`${z[3]} ${z[0]} = pedido #${q[2]} de ${mesLabel(y)} (mes vencido)`); break; } } });
     const dif=[];
     if(a&&!tienePed) dif.push("Alquilado sin pedido");
-    if(a&&!fac.length&&!(cub.length&&!ped.length)) dif.push("Alquilado sin factura"); // un pedido de varios meses se factura en el mes del pedido
+    pend.forEach(z=>dif.push(`Pedido #${z[2]} pendiente de facturar ($ ${fmt(z[6])})`));
+    ar.forEach(([y,z])=>dif.push(`Pedido #${z[2]} de ${mesLabel(y)} sigue pendiente de facturar ($ ${fmt(z[6])})`));
+    // sin la columna de pendiente (informe viejo) se sigue infiriendo por la factura del mes
+    const sinDatoPend=ped.some(z=>pendDe(z)===null);
+    if(a&&!fac.length&&!(cub.length&&!ped.length)&&!pedFacturado&&!pend.length&&(sinDatoPend||!ped.length)) dif.push("Alquilado sin factura"); // un pedido de varios meses se factura en el mes del pedido
     if(fac.length&&!facNeta) dif.push("Factura del mes anulada con N/C (neto 0)");
-    ped.filter(z=>z[4]&&!/cumplid/i.test(z[4])&&!fac.length).forEach(z=>dif.push(`Pedido #${z[2]} ${z[4].toLowerCase()} sin facturar`));
+    ped.filter(z=>pendDe(z)===null&&z[4]&&!/cumplid/i.test(z[4])&&!fac.length).forEach(z=>dif.push(`Pedido #${z[2]} ${z[4].toLowerCase()} sin facturar`));
     if(!a&&ped.length) dif.push("Pedido y no figura alquilado");
     if(!a&&fac.length) dif.push("Facturado y no figura alquilado");
-    if(tienePed&&!fac.length&&!a) dif.push("Pedido sin factura");
+    if(tienePed&&!fac.length&&!a&&!pedFacturado&&!pend.length) dif.push("Pedido sin factura");
     if(ped.length>1) dif.push(`${ped.length} pedidos en el mes`);
     const avisos=[];
     if(a&&!md&&!/PROTOTIPO/i.test(k)) avisos.push("sin modelo de pedido");
@@ -5700,7 +5719,7 @@ function modCtrlCalcular(mes){
       const unid=Math.max(1,fac.filter(z=>!/^N\/?C/i.test(z[3])).length-fac.filter(z=>/^N\/?C/i.test(z[3])).length);
       const fUsd=fac.reduce((x,z)=>x+z[1]/z[4],0), rUsd=refUsd*unid;
       if(Math.abs(fUsd-rUsd)>Math.max(1,rUsd*0.03)) avisos.push(`facturado US$ ${fmt(fUsd)} vs precio US$ ${fmt(rUsd)} (${((fUsd/rUsd-1)*100).toFixed(1)}%; pedido de ${mesLabel(ped[0][5].slice(0,7))}, comparado en US$)`);
-    } else if(ped.length&&facNeta&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
+    } else if(ped.length&&facNeta&&!facVencida.size&&Math.abs(impF-impP)>Math.max(1,Math.abs(impP)*0.03)) avisos.push(`facturado ${fmt(impF)} vs pedido ${fmt(impP)} (${impP?((impF/impP-1)*100).toFixed(1):"–"}%)`);
     const explic=dif.length?(com[k]?"Comentario":(mv.length?(mv.some(r=>r[0].slice(0,7)===mes)?"Movimiento de series en el mes":"Movimiento de series posterior al cierre"):"")):"";
     const estado=!dif.length?"OK":(explic?"Explicado":"SIN EXPLICAR");
     // código de cliente del último pedido de alquiler del contenedor (más corto que el depósito / razón social)
@@ -5708,13 +5727,14 @@ function modCtrlCalcular(mes){
     const pk=MOD_PEDIDOS.ped[k]||{}, ys=Object.keys(pk).filter(y=>y<=mes).sort(), yl=ys[ys.length-1], ult=yl&&yl>=modMesMas(mes,-1)?pk[yl][0]:null;
     const codHoy=ult?modCodCli(ult[0]):"";
     return {k,serie:s?s.serie:k,desc:s?s.serie:k,tipo:s?s.tipo:"",alq:a,dep:s?s.dep:"",codHoy,cliPed:[...new Set(ped.map(z=>modCodCli(z[0])))].join(", "),cliFac:[...new Set(fac.map(z=>fclis[z[2]]||""))].join(", "),
-      ped,impP,cub,fac,impF,mv,md,dif,avisos,explic,estado,com:com[k]||""};
+      ped,impP,cub,fac,impF,mv,md,dif,avisos,notas,impPend,explic,estado,com:com[k]||""};
   });
   // nombre legible para lo que no está en Series Activas: el del pedido/factura no lo trae; se deja el normalizado
   const ordE={"SIN EXPLICAR":0,"Explicado":1,"OK":2};
   filas.sort((x,y)=>(ordE[x.estado]-ordE[y.estado])||(y.avisos.length-x.avisos.length)||x.desc.localeCompare(y.desc,"es"));
   const tot={alq:Object.keys(alq).length,ped:Object.keys(pedM).length,impP:filas.reduce((x,f)=>x+f.impP,0),fac:Object.keys(facM).length,impF:filas.reduce((x,f)=>x+f.impF,0),
-    ok:filas.filter(f=>f.estado==="OK").length,exp:filas.filter(f=>f.estado==="Explicado").length,sin:filas.filter(f=>f.estado==="SIN EXPLICAR"),av:filas.filter(f=>f.avisos.length).length};
+    ok:filas.filter(f=>f.estado==="OK").length,exp:filas.filter(f=>f.estado==="Explicado").length,sin:filas.filter(f=>f.estado==="SIN EXPLICAR"),av:filas.filter(f=>f.avisos.length).length,
+    pend:filas.filter(f=>f.impPend>0).length,impPend:filas.reduce((x,f)=>x+f.impPend,0)};
   return {filas,tot};
 }
 function renderModCtrl(){
@@ -5732,6 +5752,7 @@ function renderModCtrl(){
     <div class="cc-cell"><span>Facturado del mes</span><b>${tot.fac}</b><small>$ ${fmt(tot.impF)}</small></div>
     <div class="cc-cell cc-ok"><span>OK</span><b>${tot.ok}</b><small>${tot.exp} con diferencia explicada</small></div>
     <div class="cc-cell ${tot.sin.length?"cc-warn":"cc-ok"}"><span>SIN EXPLICAR (debe dar 0)</span><b>${tot.sin.length}</b><small>${tot.sin.length?"$ "+fmt(sinImp):"todo cuadra"}</small></div>
+    <div class="cc-cell ${tot.pend?"cc-warn":"cc-ok"}"><span>Pedidos pendientes de facturar (del mes y anteriores)</span><b>${tot.pend}</b><small>$ ${fmt(tot.impPend)}</small></div>
     <div class="cc-cell ${tot.av?"cc-warn":""}"><span>Avisos (modelo / importe)</span><b>${tot.av}</b></div></div>`;
   const ver=filas.filter(f=>!solo||f.estado!=="OK"||f.avisos.length);
   const clsE=e=>e==="OK"?"pos":e==="Explicado"?"":"neg";
@@ -5743,7 +5764,7 @@ function renderModCtrl(){
     <td class="fzr">${f.impF?fmt(f.impF):"–"}</td>
     <td style="text-align:left;font-size:11.5px">${f.md?esc(f.md.mod)+(/^no$/i.test(f.md.hab)?" (deshab.)":""):"–"}</td>
     <td class="${clsE(f.estado)}" style="text-align:left;font-weight:600">${esc(f.estado)}</td>
-    <td style="text-align:left;font-size:11.5px">${esc(f.dif.join(" · "))}${f.avisos.length?`<div style="color:#b5462a">⚠ ${esc(f.avisos.join(" · "))}</div>`:""}${f.mv.length?`<div class="note" style="font-size:10.5px">Mov.: ${esc(f.mv.map(r=>`${r[1]} ${r[3]} ${r[4]} ${r[0].slice(8,10)}/${r[0].slice(5,7)}`).join(" | "))}</div>`:""}</td>
+    <td style="text-align:left;font-size:11.5px">${esc(f.dif.join(" · "))}${f.notas.length?`<div class="note" style="font-size:10.5px">${esc(f.notas.join(" · "))}</div>`:""}${f.avisos.length?`<div style="color:#b5462a">⚠ ${esc(f.avisos.join(" · "))}</div>`:""}${f.mv.length?`<div class="note" style="font-size:10.5px">Mov.: ${esc(f.mv.map(r=>`${r[1]} ${r[3]} ${r[4]} ${r[0].slice(8,10)}/${r[0].slice(5,7)}`).join(" | "))}</div>`:""}</td>
     <td>${f.dif.length||f.com?`<input class="txt md-ctrl-com" data-k="${esc(f.k)}" value="${esc(f.com)}" placeholder="${puede?"Explicación…":""}" style="width:220px"${puede?"":" disabled"}>`:""}</td></tr>`).join("");
   box.innerHTML=cards+(falta.length?`<div class="note" style="font-size:11.5px;margin-bottom:6px">⚠ Falta cargar: ${esc(falta.join(", "))} — el control puede dar diferencias falsas.</div>`:"")+
     `<div class="table-wrap"><table id="mdCtrlTabla"><thead><tr><th class="fz1">Contenedor</th><th style="text-align:left">Alquilado (Series)</th><th style="text-align:left">Pedido del mes</th><th>Importe pedido</th><th style="text-align:left">Factura del mes</th><th>Importe facturado</th><th style="text-align:left">Modelo</th><th style="text-align:left">Estado</th><th style="text-align:left">Diferencia / movimiento</th><th style="text-align:left">Comentario</th></tr></thead><tbody>${rows||`<tr><td colspan="10" class="note">Sin diferencias: todo cuadra.</td></tr>`}</tbody></table></div>
@@ -5757,7 +5778,7 @@ function exportModCtrl(){
   const {filas,tot}=modCtrlCalcular(mes), E=XLSX_EST, c=(v,s)=>({v,s});
   const hdr=["Contenedor","Tipología","Alquilado","Depósito / cliente","Cliente pedido","Pedidos","Importe pedido","Cubierto por pedido anterior","Cliente factura","Comprobantes","Importe facturado","Modelo","Habilitado","Estado","Diferencia","Avisos","Movimientos de series","Comentario"];
   const rows=[{cells:[c(`Control de facturación de alquileres · ${mesLabel(mes)}`,E.title)],ht:22},{cells:[c(`Alquilados ${tot.alq} · Pedidos ${tot.ped} ($ ${fmt(tot.impP)}) · Facturados ${tot.fac} ($ ${fmt(tot.impF)}) · OK ${tot.ok} · Explicados ${tot.exp} · SIN EXPLICAR ${tot.sin.length}`,E.sub)]},{cells:hdr.map(h=>c(h,E.head)),ht:28}];
-  filas.forEach(f=>rows.push({cells:[c(f.desc,E.txt),c(f.tipo,E.txt),c(f.alq?"Sí":"No",E.txt),c(f.dep,E.txt),c(f.cliPed,E.txt),c(f.ped.map(z=>z[2]).join(" "),E.txt),c(f.impP,E.num),c(f.cub.length?`${mesLabel(f.cub[0][0])} (${f.cub[0][1]} m.)`:"",E.txt),c(f.cliFac,E.txt),c(f.fac.map(z=>z[3]+" "+z[0]).join(" "),E.txt),c(f.impF,E.num),c(f.md?f.md.mod:"",E.txt),c(f.md?f.md.hab:"",E.txt),c(f.estado,f.estado==="SIN EXPLICAR"?E.numOver:E.txt),c(f.dif.join(" · "),E.txt),c(f.avisos.join(" · "),E.txt),c(f.mv.map(r=>`${r[0]} ${r[1]} ${r[3]} ${r[4]}`).join(" | "),E.txt),c(f.com,E.txt)]}));
+  filas.forEach(f=>rows.push({cells:[c(f.desc,E.txt),c(f.tipo,E.txt),c(f.alq?"Sí":"No",E.txt),c(f.dep,E.txt),c(f.cliPed,E.txt),c(f.ped.map(z=>z[2]).join(" "),E.txt),c(f.impP,E.num),c(f.cub.length?`${mesLabel(f.cub[0][0])} (${f.cub[0][1]} m.)`:"",E.txt),c(f.cliFac,E.txt),c(f.fac.map(z=>z[3]+" "+z[0]).join(" "),E.txt),c(f.impF,E.num),c(f.md?f.md.mod:"",E.txt),c(f.md?f.md.hab:"",E.txt),c(f.estado,f.estado==="SIN EXPLICAR"?E.numOver:E.txt),c(f.dif.concat(f.notas).join(" · "),E.txt),c(f.avisos.join(" · "),E.txt),c(f.mv.map(r=>`${r[0]} ${r[1]} ${r[3]} ${r[4]}`).join(" | "),E.txt),c(f.com,E.txt)]}));
   xlsxDescargar([{name:"Control facturación",cols:[18,28,9,26,26,16,14,18,14,30,14,12,10,14,34,34,40,30],rows,freeze:{r:3,c:1},filter:{r0:2,c0:0,r1:rows.length-1,c1:hdr.length-1},merges:["A1:R1","A2:R2"]}],"$",`control_facturacion_${mes}.xlsx`);
 }
 function showModSub(s){ MOD_UI.sub=s; if(s==="old"){ document.getElementById("mdNuevo").style.display="none"; document.getElementById("mdViejo").style.display=""; document.querySelectorAll(".md-subbtn").forEach(b=>b.classList.toggle("active",b.dataset.s==="old")); renderControlModulos(); return; }
