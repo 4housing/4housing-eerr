@@ -5276,8 +5276,15 @@ function modMergeMov(res){
   MOD_MOV.meses=completarMeses([...new Set([...MOD_MOV.meses,...res.meses])]);
   return res.n;
 }
+/* Encabezados de Tango: según el informe vienen con distinta mayúscula ("Cód. Artículo" / "Cód. artículo")
+   o con otro nombre ("Tipo comprobante" / "Cód. tipo comprobante"). Se buscan sin distinguir mayúsculas y con alias. */
+const MOD_HDR_ALIAS={"tipo comprobante":["cód. tipo comprobante"]};
+function modHdrIx(fila){
+  const h=(fila||[]).map(x=>String(x==null?"":x).trim().toLowerCase());
+  return n=>{ const k=n.toLowerCase(); let i=h.indexOf(k); if(i<0) (MOD_HDR_ALIAS[k]||[]).some(a=>(i=h.indexOf(a))>=0); return i; };
+}
 function modTipoArchivo(rows){
-  const h=(rows[0]||[]).map(x=>String(x==null?"":x).trim());
+  const hx=modHdrIx(rows[0]), h={includes:n=>hx(n)>=0};
   if(h.includes("Tipo de auxiliar")) return "mov";
   if(h.includes("Movimiento")&&h.includes("Serie")&&h.includes("Comprobante")) return "movser"; // antes que Series Activas: también trae Serie y Descripción depósito
   if(h.includes("Serie")&&h.includes("Descripción depósito")) return "series";
@@ -5287,21 +5294,21 @@ function modTipoArchivo(rows){
   return null;
 }
 function modLeerSeries(rows){
-  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim());
+  const ix=modHdrIx(rows[0]), S=s=>(s==null?"":(""+s).trim());
   const out={};
   rows.slice(1).forEach(r=>{ if(!r) return; const serie=S(r[ix("Serie")]); if(!serie) return;
     out[modNorm(serie)]={serie,art:S(r[ix("Cód. Artículo")]),tipo:S(r[ix("Descripción")]),depCod:S(r[ix("Cód. Depósito")]),dep:S(r[ix("Descripción depósito")]),com:S(r[ix("Comentario")]),ub:S(r[ix("Adicional 2")]),alt:S(r[ix("Adicional 1")]),cb:S(r[ix("Código de Barras")])}; });
   return out;
 }
 function modLeerPrecios(rows){
-  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const ix=modHdrIx(rows[0]), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
   const out={};
   rows.slice(1).forEach(r=>{ if(!r) return; const id=S(r[ix("Desc. Adicional")]); if(!id) return;
     out[modNorm(id)]={id,cb:S(r[ix("Código de Barras")]),art:S(r[ix("Cód. Artículo")]),tipo:S(r[ix("Descripción")]),grupo:S(r[ix("Grupo")]),region:S(r[ix("Familia")]),lista:S(r[ix("Lista de precios")]),precio:N(r[ix("Precio")]),moneda:S(r[ix("Moneda")])==="EXT"?"US$":"$"}; });
   return out;
 }
 function modLeerPedidos(rows){
-  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const ix=modHdrIx(rows[0]), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
   const clientes=[], codigos=[], cIdx={}, ped={}; let n=0;
   rows.slice(1).forEach(r=>{ if(!r) return;
     if(/anulad|cerrad/i.test(S(r[ix("ESTADO")]))) return; // a pedido de Micaela: no cuentan los anulados ni los cerrados
@@ -5461,9 +5468,12 @@ async function onCargarInformesModulos(ev){
       if(tipo==="mov"){ const r=modAgregarMov(rows); const n=modMergeMov(r); guardar.add("MODULOS_MOV"); partes.push(`✓ ${file.name}: ${n} movimientos de ${Object.keys(r.mods).length} módulos (${r.meses.length?mesLabel(r.meses[0])+" a "+mesLabel(r.meses[r.meses.length-1]):"sin meses"})`); }
       else if(tipo==="series"){ MOD_MAESTRO.series=modLeerSeries(rows); MOD_MAESTRO.fSeries=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.series).length} unidades (Series Activas)`); }
       else if(tipo==="precios"){ MOD_MAESTRO.precios=modLeerPrecios(rows); MOD_MAESTRO.fPrecios=hoy; guardar.add("MODULOS_MAESTRO"); partes.push(`✓ ${file.name}: ${Object.keys(MOD_MAESTRO.precios).length} precios`); }
-      else if(tipo==="pedidos"){ const r=modLeerPedidos(rows); MOD_PEDIDOS={clientes:r.clientes,codigos:r.codigos,ped:r.ped,fecha:hoy}; guardar.add("MODULOS_PEDIDOS"); partes.push(`✓ ${file.name}: ${r.n} pedidos de alquiler de ${Object.keys(r.ped).length} contenedores`); }
-      else if(tipo==="fact"){ const r=modLeerFact(rows); MOD_FACT={fact:r.fact,clientes:r.clientes,fecha:hoy}; guardar.add("MODULOS_FACT"); partes.push(`✓ ${file.name}: ${r.n} renglones de facturación de alquiler (${Object.keys(r.fact).length} contenedores)`); }
-      else if(tipo==="movser"){ MOD_MOVSER={rows:modLeerMovSeries(rows),fecha:hoy}; guardar.add("MODULOS_MOVSER"); partes.push(`✓ ${file.name}: ${MOD_MOVSER.rows.length} movimientos de series`); }
+      else if(tipo==="pedidos"){ const r=modLeerPedidos(rows), meses=modMesesArchivo(rows,"FEC_ENTREG"), m=modMergePorMes(MOD_PEDIDOS.ped,r.ped,meses,0,MOD_PEDIDOS.clientes,r.clientes,MOD_PEDIDOS.codigos||MOD_PEDIDOS.clientes||[],r.codigos);
+        MOD_PEDIDOS={clientes:m.clientes,codigos:m.codigos,ped:m.datos,fecha:hoy}; guardar.add("MODULOS_PEDIDOS"); partes.push(`✓ ${file.name}: ${r.n} pedidos de alquiler de ${Object.keys(r.ped).length} contenedores (reemplaza ${modMesesTxt(meses)}, conserva el resto)`); }
+      else if(tipo==="fact"){ const r=modLeerFact(rows), meses=modMesesArchivo(rows,"Fecha de emisión"), m=modMergePorMes(MOD_FACT.fact,r.fact,meses,2,MOD_FACT.clientes,r.clientes);
+        MOD_FACT={fact:m.datos,clientes:m.clientes,fecha:hoy}; guardar.add("MODULOS_FACT"); partes.push(`✓ ${file.name}: ${r.n} renglones de facturación de alquiler de ${Object.keys(r.fact).length} contenedores (reemplaza ${modMesesTxt(meses)}, conserva el resto)`); }
+      else if(tipo==="movser"){ const nuevos=modLeerMovSeries(rows), meses=new Set(nuevos.map(r=>r[0].slice(0,7)));
+        MOD_MOVSER={rows:(MOD_MOVSER.rows||[]).filter(r=>!meses.has(r[0].slice(0,7))).concat(nuevos).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0),fecha:hoy}; guardar.add("MODULOS_MOVSER"); partes.push(`✓ ${file.name}: ${nuevos.length} movimientos de series (reemplaza ${modMesesTxt(meses)}, conserva el resto; total ${MOD_MOVSER.rows.length})`); }
       else partes.push(`✗ ${file.name}: no reconozco el informe (subí Series Activas, Precios por artículo, Pedidos, Res x Art Mensual, Movimientos de series, Modelos de pedidos, el crudo o el Histórico)`);
     }catch(e){ partes.push(`✗ ${file.name}: ${e.message}`); console.error(e); }
   }
@@ -5603,7 +5613,7 @@ function modRowsDeHoja(ws){
   return XLSX.utils.sheet_to_json(ws,{header:1,raw:true});
 }
 function modLeerFact(rows){
-  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
+  const ix=modHdrIx(rows[0]), S=s=>(s==null?"":(""+s).trim()), N=x=>{const v=typeof x==="number"?x:parseFloat(x);return isNaN(v)?0:v;};
   const fact={}, clientes=[], cIdx={}; let n=0;
   rows.slice(1).forEach(r=>{ if(!r) return; if(!MOD_ART_ALQ.test(S(r[ix("Cód. Artículo")]))) return;
     const serie=S(r[ix("Descripción adicional")])||S(r[ix("Sinónimo")]), f=parseFechaCell(r[ix("Fecha de emisión")]); if(!serie||!f) return;
@@ -5612,8 +5622,25 @@ function modLeerFact(rows){
     const k=modNorm(serie), p=fact[k]||(fact[k]={}); (p[y]||(p[y]=[])).push([S(r[ix("Nro. comprobante")]),Math.round(N(r[ix("Total")])),cIdx[cli],S(r[ix("Tipo comprobante")]),N(r[ix("Cotización")]),S(r[ix("Lista de precios")])]); n++; });
   return {fact,clientes,n};
 }
+/* Carga mensual: un informe de un mes reemplaza SOLO los meses que trae y conserva el resto del histórico.
+   mesesArchivo: meses (AAAA-MM) presentes en el archivo, aunque sus renglones no sean de alquiler. */
+function modMesesArchivo(rows,col){
+  const ix=modHdrIx(rows[0]), c=ix(col), out=new Set(); if(c<0) return out;
+  rows.slice(1).forEach(r=>{ const f=r&&parseFechaCell(r[c]); if(f) out.add(f.getUTCFullYear()+"-"+String(f.getUTCMonth()+1).padStart(2,"0")); });
+  return out;
+}
+function modMergePorMes(viejo,nuevo,meses,posCli,clisV,clisN,codsV,codsN){
+  const clientes=(clisV||[]).slice(), codigos=codsV?codsV.slice():null, key=i=>codsV?((codsV[i]||clientes[i])):clientes[i], mapa={};
+  clientes.forEach((c,i)=>{ mapa[key(i)]=i; });
+  const remap=i=>{ const k=codsN?(codsN[i]||clisN[i]):clisN[i]; if(!(k in mapa)){ mapa[k]=clientes.length; clientes.push(clisN[i]); if(codigos) codigos.push(k); } return mapa[k]; };
+  const out={};
+  Object.entries(viejo||{}).forEach(([k,p])=>{ Object.entries(p).forEach(([y,l])=>{ if(meses.has(y)) return; (out[k]||(out[k]={}))[y]=l; }); });
+  Object.entries(nuevo||{}).forEach(([k,p])=>{ Object.entries(p).forEach(([y,l])=>{ (out[k]||(out[k]={}))[y]=l.map(z=>{ const c=z.slice(); c[posCli]=remap(z[posCli]); return c; }); }); });
+  return {datos:out,clientes,codigos};
+}
+const modMesesTxt=m=>{ const a=[...m].sort(); return !a.length?"sin meses":a.length===1?mesLabel(a[0]):mesLabel(a[0])+" a "+mesLabel(a[a.length-1]); };
 function modLeerMovSeries(rows){
-  const h=rows[0].map(x=>String(x||"").trim()), ix=n=>h.indexOf(n), S=s=>(s==null?"":(""+s).trim());
+  const ix=modHdrIx(rows[0]), S=s=>(s==null?"":(""+s).trim());
   const out=[]; rows.slice(1).forEach(r=>{ if(!r) return; const f=parseFechaCell(r[ix("Fecha")]), serie=S(r[ix("Serie")]); if(!f||!serie) return;
     out.push([f.toISOString().slice(0,10),S(r[ix("Comprobante")]),S(r[ix("Número")]).replace(/^0+/,""),S(r[ix("Movimiento")]),S(r[ix("Descripción depósito")]),serie,S(r[ix("Descripción")])]); });
   return out;
